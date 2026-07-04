@@ -116,40 +116,40 @@ type AgentTraceStep = {
 const persona = {
   owner: "Alice",
   business: "Alice & Co. Coffee Roasters",
-  agent: "Luigi",
+  agent: "Bruno",
   shortBusiness: "Alice’s roastery",
   description:
     "Alice runs a wholesale coffee roastery supplying cafés, offices, and local retailers.",
-  goal: "Luigi helps Alice keep cash moving without damaging customer relationships.",
+  goal: "Bruno helps Alice keep cash moving without damaging customer relationships.",
 };
 
 const agentToolLabels: Record<string, string> = {
-  "list-invoices": "Luigi is checking the unpaid café tabs...",
-  "list-contacts": "Luigi is looking through Alice’s customer book...",
-  "list-contact-groups": "Luigi is sorting wholesale customers...",
-  "list-accounts": "Luigi is checking the ledgers behind the counter...",
-  "list-items": "Luigi is counting beans, blends, and line items...",
-  "list-tax-rates": "Luigi is checking the tax notes...",
-  "list-organisation-details": "Luigi is reading the roastery details...",
-  "list-tracking-categories": "Luigi is sorting the labels on the shelves...",
-  "list-payments": "Luigi is following the money trail...",
-  "list-bank-transactions": "Luigi is checking the bank statement...",
-  "list-credit-notes": "Luigi is checking credits and adjustments...",
-  "list-quotes": "Luigi is checking old quotes...",
-  "list-manual-journals": "Luigi is reading the manual journals...",
-  "list-profit-and-loss": "Luigi is brewing the profit & loss...",
-  "list-report-balance-sheet": "Luigi is weighing the balance sheet...",
-  "list-trial-balance": "Luigi is giving the trial balance a stern look...",
+  "list-invoices": "Bruno is checking the unpaid café tabs...",
+  "list-contacts": "Bruno is looking through Alice’s customer book...",
+  "list-contact-groups": "Bruno is sorting wholesale customers...",
+  "list-accounts": "Bruno is checking the ledgers behind the counter...",
+  "list-items": "Bruno is counting beans, blends, and line items...",
+  "list-tax-rates": "Bruno is checking the tax notes...",
+  "list-organisation-details": "Bruno is reading the roastery details...",
+  "list-tracking-categories": "Bruno is sorting the labels on the shelves...",
+  "list-payments": "Bruno is following the money trail...",
+  "list-bank-transactions": "Bruno is checking the bank statement...",
+  "list-credit-notes": "Bruno is checking credits and adjustments...",
+  "list-quotes": "Bruno is checking old quotes...",
+  "list-manual-journals": "Bruno is reading the manual journals...",
+  "list-profit-and-loss": "Bruno is brewing the profit & loss...",
+  "list-report-balance-sheet": "Bruno is weighing the balance sheet...",
+  "list-trial-balance": "Bruno is giving the trial balance a stern look...",
   "list-aged-receivables-by-contact":
-    "Luigi is checking which customers are overdue...",
+    "Bruno is checking which customers are overdue...",
   "list-aged-payables-by-contact":
-    "Luigi is checking what Alice still needs to pay...",
+    "Bruno is checking what Alice still needs to pay...",
 };
 
 const agentStatusLabels: Record<string, string> = {
-  "Cracking open the books...": "Luigi is opening the roastery books...",
+  "Cracking open the books...": "Bruno is opening the roastery books...",
   "Adding it all up (carrying the one)...":
-    "Luigi is adding it all up, one espresso at a time...",
+    "Bruno is adding it all up, one espresso at a time...",
 };
 
 const agentToolSources: Record<string, string> = {
@@ -624,17 +624,15 @@ export function XeroApp({
         <nav className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-5 sm:px-8">
           <div className="flex items-center gap-8">
             <Link className="flex items-center gap-3" href="/">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#6f2f1f] shadow-sm">
-                <div className="relative h-6 w-5 rotate-[-18deg] rounded-full bg-[#fff7ec]">
-                  <span className="absolute left-1/2 top-[3px] h-[18px] w-[2px] -translate-x-1/2 rounded-full bg-[#6f2f1f]" />
-                  <span className="absolute left-[7px] top-[5px] h-3 w-[2px] rotate-[28deg] rounded-full bg-[#6f2f1f]" />
-                  <span className="absolute left-[10px] top-[8px] h-3 w-[2px] rotate-[28deg] rounded-full bg-[#6f2f1f]" />
-                </div>
+              <div className="flex h-10 w-10 flex-col items-center justify-center gap-[3px] rounded-2xl bg-[#6f2f1f] shadow-sm">
+                <span className="h-[3px] w-4 rounded-full bg-[#fff7ec]" />
+                <span className="h-[3px] w-4 rounded-full bg-[#fff7ec]" />
+                <span className="h-[3px] w-4 rounded-full bg-[#fff7ec]" />
               </div>
 
               <div className="leading-tight">
                 <p className="font-[family-name:var(--font-fraunces)] text-lg font-semibold tracking-[-0.02em] text-[#2f2417]">
-                  Alice’s Brew Books
+                  Steady Books
                 </p>
               </div>
             </Link>
@@ -672,46 +670,44 @@ export function XeroApp({
       </header>
 
       <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-5 py-8 sm:px-8">
-        <section className="overflow-hidden rounded-3xl border border-[#e4d2b8] bg-[#fffaf4] px-5 py-4 shadow-sm sm:px-6 sm:py-5">
-          <div className="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-center">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#9a6b3f]">
-                {status.isConnected ? status.tenantName : persona.business}
-              </p>
-
-              <h1 className="mt-2 text-2xl font-semibold leading-tight sm:text-3xl">
-                {view === "dashboard"
-                  ? "Alice’s roastery books."
-                  : "Ask Bruno what Alice should do next."}
-              </h1>
-
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-[#6f5f4b]">
-                {view === "dashboard"
-                  ? "Bruno turns Alice’s Xero data into a simple cash-flow view."
-                  : "Bruno checks Xero MCP tools, finds late café payments, and drafts customer-friendly follow-ups."}
-              </p>
-            </div>
-
-            <div className="flex items-center gap-4 lg:justify-end">
-              <div className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[#eadbc3] bg-[#f7efe5] shadow-sm sm:h-28 sm:w-28">
-                <img
-                  alt="Bruno, Alice’s AI cash-flow assistant"
-                  className="h-full w-full object-cover"
-                  src="/bruno.png"
-                />
-              </div>
-
-              <div className="text-left">
-                <p className="font-[family-name:var(--font-fraunces)] text-lg font-semibold tracking-[-0.02em] text-[#2f2417]">
-                  Welcome back, Alice.
+        {view === "dashboard" ? (
+          <section className="overflow-hidden rounded-3xl border border-[#e4d2b8] bg-[#fffaf4] px-5 py-4 shadow-sm sm:px-6 sm:py-5">
+            <div className="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-center">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#9a6b3f]">
+                  {status.isConnected ? status.tenantName : persona.business}
                 </p>
-                <p className="mt-0.5 text-xs leading-5 text-[#6f5f4b]">
-                  Bruno has the books ready.
+
+                <h1 className="mt-2 text-2xl font-semibold leading-tight sm:text-3xl">
+                  Alice’s roastery books.
+                </h1>
+
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-[#6f5f4b]">
+                  Bruno turns Alice’s Xero data into a simple cash-flow view.
                 </p>
               </div>
+
+              <div className="flex items-center gap-4 lg:justify-end">
+                <div className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[#eadbc3] bg-[#f7efe5] shadow-sm sm:h-28 sm:w-28">
+                  <img
+                    alt="Bruno, Alice’s AI cash-flow assistant"
+                    className="h-full w-full object-cover"
+                    src="/bruno.png"
+                  />
+                </div>
+
+                <div className="text-left">
+                  <p className="font-[family-name:var(--font-fraunces)] text-lg font-semibold tracking-[-0.02em] text-[#2f2417]">
+                    Welcome back, Alice.
+                  </p>
+                  <p className="mt-0.5 text-xs leading-5 text-[#6f5f4b]">
+                    Bruno has the books ready.
+                  </p>
+                </div>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
+        ) : null}
 
         {view === "dashboard" ? (
           <DashboardView
@@ -836,7 +832,7 @@ function DashboardView({
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard
           label="Bank balance"
-          question="Luigi, is Alice’s bank balance healthy given upcoming bills?"
+          question="Bruno, is Alice’s bank balance healthy given upcoming bills?"
           value={
             reports?.bank
               ? money.format(reports.bank.total)
@@ -847,17 +843,17 @@ function DashboardView({
         />
         <MetricCard
           label="Recievables"
-          question="Luigi, who owes Alice money and who should she chase first?"
+          question="Bruno, who owes Alice money and who should she chase first?"
           value={money.format(metrics.receivablesDue)}
         />
         <MetricCard
           label="Payables"
-          question="Luigi, which bills should Alice be aware of?"
+          question="Bruno, which bills should Alice be aware of?"
           value={money.format(metrics.payablesDue)}
         />
         <MetricCard
           label="Overdue invoices"
-          question="Luigi, draft payment nudges for overdue café invoices"
+          question="Bruno, draft payment nudges for overdue café invoices"
           value={String(metrics.overdueInvoices)}
         />
       </section>
@@ -932,7 +928,7 @@ function MetricCard({
         {label}
         {question ? (
           <span aria-hidden className="text-xs text-[#a3907a]">
-            Ask Luigi →
+            Ask Bruno →
           </span>
         ) : null}
       </p>
@@ -1232,7 +1228,7 @@ function InvoiceTable({
                   className="px-4 py-8 text-center text-[#6f5f4b]"
                   colSpan={6}
                 >
-                  Luigi is loading invoices...
+                  Bruno is loading invoices...
                 </td>
               </tr>
             ) : invoices.length === 0 ? (
@@ -1301,10 +1297,10 @@ function ReviewView({
 }) {
   const [question, setQuestion] = useState(initialQuestion);
   const suggestionButtons = [
-    "Luigi, who should Alice chase first today?",
-    "Luigi, what cash is at risk this week?",
-    "Luigi, how is the roastery performing?",
-    "Luigi, which café customers are the biggest credit risk?",
+    "Bruno, who should Alice chase first today?",
+    "Bruno, what cash is at risk this week?",
+    "Bruno, how is the roastery performing?",
+    "Bruno, which café customers are the biggest credit risk?",
   ];
   const lastTurn =
     agentTurns.length > 0 ? agentTurns[agentTurns.length - 1] : null;
@@ -1329,9 +1325,9 @@ function ReviewView({
       <div className="rounded-2xl border border-[#e4d2b8] bg-[#fffaf4] p-5">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-lg font-semibold">Ask Luigi</h2>
+            <h2 className="text-lg font-semibold">Ask Bruno</h2>
             <p className="mt-1 text-sm leading-6 text-[#6f5f4b]">
-              Luigi has live read-only tools over Alice&apos;s Xero data:
+              Bruno has live read-only tools over Alice&apos;s Xero data:
               invoices, reports, payments, contacts, and customer risk signals.
               He remembers this conversation, so you can follow up on his
               findings.
@@ -1359,8 +1355,8 @@ function ReviewView({
             onChange={(event) => setQuestion(event.target.value)}
             placeholder={
               agentTurns.length > 0
-                ? "Ask a follow-up — Luigi remembers this conversation"
-                : "Ask Luigi about overdue café invoices, cash flow, spending, or customer risk"
+                ? "Ask a follow-up — Bruno remembers this conversation"
+                : "Ask Bruno about overdue café invoices, cash flow, spending, or customer risk"
             }
             type="text"
             value={question}
@@ -1370,7 +1366,7 @@ function ReviewView({
             disabled={!status.isConnected || isAgentRunning || !question.trim()}
             type="submit"
           >
-            {isAgentRunning ? "Brewing..." : "Ask Luigi"}
+            {isAgentRunning ? "Brewing..." : "Ask Bruno"}
           </button>
         </form>
 
@@ -1392,7 +1388,7 @@ function ReviewView({
 
         {lockedTools.length > 0 ? (
           <p className="mt-3 rounded-2xl border border-[#ead0a2] bg-[#fff8e8] px-3 py-2 text-xs text-[#6d4c16]">
-            {lockedTools.length} Luigi abilities are not covered by your current
+            {lockedTools.length} Bruno abilities are not covered by your current
             Xero token. Disconnecting and reconnecting unlocks any that your
             Xero app configuration allows.
           </p>
@@ -1401,7 +1397,7 @@ function ReviewView({
         <div className="mt-5 grid gap-3 border-t border-[#f0e7d6] pt-4 text-sm sm:grid-cols-4">
           <ReviewContextItem label="Invoices" value={String(invoices.length)} />
           <ReviewContextItem
-            label="Luigi"
+            label="Bruno"
             value={isAgentRunning ? "Working" : lastTurn ? "Ready" : "Idle"}
           />
           <ReviewContextItem label="Turns" value={String(agentTurns.length)} />
@@ -1411,7 +1407,7 @@ function ReviewView({
 
       {agentTurns.length === 0 ? (
         <div className="rounded-2xl border border-[#e4d2b8] bg-[#fffaf4] px-5 py-14 text-center text-sm text-[#6f5f4b]">
-          Ask Luigi a question or pick a suggestion. Luigi chooses which Xero
+          Ask Bruno a question or pick a suggestion. Bruno chooses which Xero
           MCP tools to call, shows his working, and suggests follow-up actions
           Alice can take.
         </div>
@@ -1506,7 +1502,7 @@ function ReviewView({
                           <dd className="font-semibold">{item.daysPastDue}</dd>
                         </div>
                         <div>
-                          <dt className="text-[#6f5f4b]">Luigi’s action</dt>
+                          <dt className="text-[#6f5f4b]">Bruno’s action</dt>
                           <dd className="font-semibold">
                             {item.recommendedAction}
                           </dd>
@@ -1581,7 +1577,7 @@ function FollowUpForm({
         className="h-10 min-w-0 flex-1 rounded-full border border-[#cdbba1] bg-[#fffaf4] px-3 text-sm outline-none transition placeholder:text-[#a3907a] focus:border-[#6f2f1f] focus:ring-2 focus:ring-[#eadbc3]"
         disabled={disabled}
         onChange={(event) => setFollowUp(event.target.value)}
-        placeholder="Or ask Luigi a follow-up..."
+        placeholder="Or ask Bruno a follow-up..."
         type="text"
         value={followUp}
       />
@@ -1624,7 +1620,7 @@ function AgentProgress({
           className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-[#eadbc3] border-t-[#6f2f1f]"
         />
         <p className="text-sm font-medium text-[#2f2417]">
-          {current?.label ?? "Luigi is thinking over the numbers..."}
+          {current?.label ?? "Bruno is thinking over the numbers..."}
         </p>
       </div>
     );
@@ -1644,7 +1640,7 @@ function AgentProgress({
 
   return (
     <p className="px-1 text-xs text-[#a3907a]">
-      Luigi checked: {checkedSources.join(" · ")}
+      Bruno checked: {checkedSources.join(" · ")}
     </p>
   );
 }
@@ -1696,7 +1692,7 @@ function EditableEmailDraft({ item }: { item: InvoiceReview }) {
   return (
     <div className="mt-4 rounded-2xl border border-[#e4d2b8] bg-[#fbf6ec] p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-sm font-semibold">Luigi’s draft nudge</p>
+        <p className="text-sm font-semibold">Bruno’s draft nudge</p>
         <button
           className="inline-flex h-9 items-center justify-center rounded-full border border-[#cdbba1] bg-[#fffaf4] px-3 text-sm font-semibold text-[#2f2417] transition hover:bg-[#f3ead9]"
           onClick={copyDraft}
