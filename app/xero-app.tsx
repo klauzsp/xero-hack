@@ -215,6 +215,10 @@ export function XeroApp({
   const [reports, setReports] = useState<DashboardReports | null>(null);
   const [isLoadingReports, setIsLoadingReports] = useState(false);
   const [hasLoadedReports, setHasLoadedReports] = useState(false);
+  const [isTriggeringCashFlow, setIsTriggeringCashFlow] = useState(false);
+  const [cashFlowAutomationMessage, setCashFlowAutomationMessage] = useState<
+    string | null
+  >(null);
   const traceIdRef = useRef(0);
   const turnIdRef = useRef(0);
   const interactionIdRef = useRef<string | null>(null);
@@ -402,6 +406,54 @@ export function XeroApp({
       setMessage(error instanceof Error ? error.message : "Disconnect failed");
     } finally {
       setIsDisconnecting(false);
+    }
+  }
+
+  async function triggerCashFlowAutomation() {
+    setIsTriggeringCashFlow(true);
+    setCashFlowAutomationMessage(null);
+    setMessage("Sending cash-flow recommendation request to Make...");
+
+    try {
+      const response = await fetch("/api/make/bruno-cash-flow", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          business: persona.business,
+          tenantName: status.tenantName,
+          metrics: {
+            bankBalance: reports?.bank?.total ?? null,
+            receivablesDue: metrics.receivablesDue,
+            payablesDue: metrics.payablesDue,
+            overdueInvoices: metrics.overdueInvoices,
+            openInvoices: metrics.openInvoices,
+          },
+        }),
+      });
+      const data = (await response.json()) as {
+        detail?: string;
+        error?: string;
+        ok?: boolean;
+      };
+
+      if (!response.ok) {
+        throw new Error(data.detail ?? data.error ?? "Make automation failed");
+      }
+
+      setCashFlowAutomationMessage(
+        "Cash-flow recommendations sent to Slack.",
+      );
+      setMessage("Make automation triggered successfully.");
+    } catch (error) {
+      const nextMessage =
+        error instanceof Error ? error.message : "Make automation failed";
+
+      setCashFlowAutomationMessage(nextMessage);
+      setMessage(nextMessage);
+    } finally {
+      setIsTriggeringCashFlow(false);
     }
   }
 
@@ -639,10 +691,13 @@ export function XeroApp({
             isLoadingInvoices={isLoadingInvoices}
             isLoadingReports={isLoadingReports}
             invoiceError={invoiceError}
+            isTriggeringCashFlow={isTriggeringCashFlow}
             loadInvoices={loadInvoices}
             metrics={metrics}
             money={money}
             reports={reports}
+            cashFlowAutomationMessage={cashFlowAutomationMessage}
+            triggerCashFlowAutomation={triggerCashFlowAutomation}
             status={status}
           />
         ) : (
@@ -726,20 +781,26 @@ function DashboardView({
   isLoadingInvoices,
   isLoadingReports,
   invoiceError,
+  isTriggeringCashFlow,
   loadInvoices,
   metrics,
   money,
   reports,
+  cashFlowAutomationMessage,
+  triggerCashFlowAutomation,
   status,
 }: {
   invoices: Invoice[];
   isLoadingInvoices: boolean;
   isLoadingReports: boolean;
   invoiceError: string | null;
+  isTriggeringCashFlow: boolean;
   loadInvoices: (fresh?: boolean) => void;
   metrics: DashboardMetrics;
   money: Intl.NumberFormat;
   reports: DashboardReports | null;
+  cashFlowAutomationMessage: string | null;
+  triggerCashFlowAutomation: () => void;
   status: Status;
 }) {
   return (
@@ -839,6 +900,21 @@ function DashboardView({
           >
             {isLoadingInvoices ? "Refreshing..." : "Refresh Xero data"}
           </button>
+          <button
+            className="mt-3 inline-flex h-10 w-full items-center justify-center rounded-full bg-[#6f2f1f] px-3 text-sm font-semibold text-white transition hover:bg-[#572417] disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!status.isConnected || isTriggeringCashFlow}
+            onClick={triggerCashFlowAutomation}
+            type="button"
+          >
+            {isTriggeringCashFlow
+              ? "Sending to Slack..."
+              : "Send Slack cash-flow recommendations"}
+          </button>
+          {cashFlowAutomationMessage ? (
+            <p className="mt-3 rounded-2xl bg-[#f3ead9] px-3 py-2 text-xs leading-5 text-[#6f5f4b]">
+              {cashFlowAutomationMessage}
+            </p>
+          ) : null}
         </aside>
       </section>
     </>

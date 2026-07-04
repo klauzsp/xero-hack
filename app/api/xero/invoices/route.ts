@@ -1,4 +1,8 @@
-import { fetchXeroInvoices, getErrorDetail } from "@/lib/xeroInvoices";
+import {
+  fetchXeroInvoices,
+  getErrorDetail,
+  getErrorStatus,
+} from "@/lib/xeroInvoices";
 
 export const runtime = "nodejs";
 
@@ -15,7 +19,7 @@ export async function GET(request: Request) {
         error: "Unable to retrieve Xero invoices",
         detail: getErrorDetail(error),
       },
-      { status: 500 },
+      { status: getErrorStatus(error) },
     );
   }
 }

@@ -38,6 +38,30 @@ export function getErrorDetail(error: unknown) {
     return error.message;
   }
 
+  if (typeof error === "string") {
+    try {
+      const parsed = JSON.parse(error) as {
+        response?: {
+          statusCode?: number;
+          headers?: Record<string, string>;
+        };
+      };
+      const statusCode = parsed.response?.statusCode;
+      const headers = parsed.response?.headers;
+
+      if (
+        statusCode === 429 &&
+        headers?.["x-rate-limit-problem"] === "day"
+      ) {
+        return `Xero daily API limit reached. Try again after ${headers["retry-after"] ?? "the retry window"} seconds.`;
+      }
+    } catch {
+      return error;
+    }
+
+    return error;
+  }
+
   if (error && typeof error === "object") {
     const responseBody = (error as { response?: { body?: unknown } }).response
       ?.body;
@@ -54,6 +78,35 @@ export function getErrorDetail(error: unknown) {
   }
 
   return "Unknown error";
+}
+
+export function getErrorStatus(error: unknown) {
+  if (typeof error === "string") {
+    try {
+      const parsed = JSON.parse(error) as {
+        response?: {
+          statusCode?: number;
+        };
+      };
+
+      if (parsed.response?.statusCode) {
+        return parsed.response.statusCode;
+      }
+    } catch {
+      return 500;
+    }
+  }
+
+  if (error && typeof error === "object") {
+    const statusCode = (error as { response?: { statusCode?: unknown } })
+      .response?.statusCode;
+
+    if (typeof statusCode === "number") {
+      return statusCode;
+    }
+  }
+
+  return 500;
 }
 
 type InvoiceFetchResult = Awaited<ReturnType<typeof fetchXeroInvoicesUncached>>;

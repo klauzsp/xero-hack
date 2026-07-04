@@ -1,5 +1,5 @@
 import { fetchXeroDashboardReports } from "@/lib/xeroReports";
-import { getErrorDetail } from "@/lib/xeroInvoices";
+import { getErrorDetail, getErrorStatus } from "@/lib/xeroInvoices";
 
 export const runtime = "nodejs";
 
@@ -14,7 +14,7 @@ export async function GET() {
         error: "Unable to load dashboard reports",
         detail: getErrorDetail(error),
       },
-      { status: 500 },
+      { status: getErrorStatus(error) },
     );
   }
 }
