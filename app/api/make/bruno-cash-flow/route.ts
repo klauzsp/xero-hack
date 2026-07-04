@@ -9,7 +9,8 @@ function getErrorDetail(error: unknown) {
 }
 
 export async function POST(request: Request) {
-  const brunoSearch = process.env.MAKE_BRUNO_SEARCH;
+  const brunoSearch =
+    process.env.MAKE_BRUNO_SEARCH_API ?? process.env.MAKE_BRUNO_SEARCH;
   const brunoSearchIsUrl = brunoSearch?.startsWith("http");
   const webhookUrl =
     process.env.MAKE_BRUNO_URL ??

@@ -1,3 +1,5 @@
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { createXeroClient } from "@/lib/xeroClient";
 import { fetchXeroInvoicesViaMcp } from "@/lib/xeroMcp";
 import { getXeroConnection, saveXeroConnection } from "@/lib/xeroStore";
@@ -110,10 +112,17 @@ export function getErrorStatus(error: unknown) {
 }
 
 type InvoiceFetchResult = Awaited<ReturnType<typeof fetchXeroInvoicesUncached>>;
+type SuccessfulInvoiceFetchResult = Extract<InvoiceFetchResult, { ok: true }>;
+
+type InvoiceSnapshot = {
+  savedAt: string;
+  result: SuccessfulInvoiceFetchResult;
+};
 
 // Short-lived cache: the dashboard, review, and agent flows all want the same
 // invoice list, and Xero enforces per-minute and concurrency rate limits.
 const invoiceCacheTtlMs = 60_000;
+const invoiceSnapshotPath = join(process.cwd(), ".xero-invoices-snapshot.json");
 let invoiceCache: {
   at: number;
   pageSize: number;
@@ -137,13 +146,92 @@ export async function fetchXeroInvoices(
     return invoiceCache.result;
   }
 
-  const result = await fetchXeroInvoicesUncached(pageSize);
+  let result: InvoiceFetchResult;
+
+  try {
+    result = await fetchXeroInvoicesUncached(pageSize);
+  } catch (error) {
+    const connection = getXeroConnection();
+    const snapshot = readInvoiceSnapshot(pageSize, connection.tenantId);
+
+    if (snapshot) {
+      return {
+        ...snapshot.result,
+        body: {
+          ...snapshot.result.body,
+          stale: true,
+          snapshotSavedAt: snapshot.savedAt,
+          staleReason: getErrorDetail(error),
+        },
+      };
+    }
+
+    throw error;
+  }
 
   if (result.ok) {
     invoiceCache = { at: Date.now(), pageSize, result };
+    writeInvoiceSnapshot(result);
   }
 
   return result;
+}
+
+function readInvoiceSnapshot(pageSize: number, tenantId?: string | null) {
+  if (!existsSync(invoiceSnapshotPath)) {
+    return null;
+  }
+
+  try {
+    const snapshot = JSON.parse(
+      readFileSync(invoiceSnapshotPath, "utf8"),
+    ) as InvoiceSnapshot;
+
+    if (
+      !snapshot.result.ok ||
+      snapshot.result.body.invoices.length === 0 ||
+      !tenantId ||
+      snapshot.result.body.tenantId !== tenantId
+    ) {
+      return null;
+    }
+
+    if (snapshot.result.body.invoices.length > pageSize) {
+      return {
+        ...snapshot,
+        result: {
+          ...snapshot.result,
+          body: {
+            ...snapshot.result.body,
+            count: pageSize,
+            invoices: snapshot.result.body.invoices.slice(0, pageSize),
+          },
+        },
+      };
+    }
+
+    return snapshot;
+  } catch {
+    return null;
+  }
+}
+
+function writeInvoiceSnapshot(result: SuccessfulInvoiceFetchResult) {
+  try {
+    writeFileSync(
+      invoiceSnapshotPath,
+      JSON.stringify(
+        {
+          savedAt: new Date().toISOString(),
+          result,
+        } satisfies InvoiceSnapshot,
+        null,
+        2,
+      ),
+    );
+  } catch (error) {
+    console.warn("[Xero] Unable to write invoice snapshot", error);
+  }
 }
 
 async function fetchXeroInvoicesUncached(pageSize: number) {

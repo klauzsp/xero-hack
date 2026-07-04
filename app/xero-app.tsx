@@ -31,6 +31,9 @@ type Invoice = {
 type InvoiceResponse = {
   count: number;
   invoices: Invoice[];
+  stale?: boolean;
+  snapshotSavedAt?: string;
+  staleReason?: string;
 };
 
 type DashboardMetrics = {
@@ -211,6 +214,7 @@ export function XeroApp({
   const [agentTurns, setAgentTurns] = useState<AgentTurn[]>([]);
   const [lockedTools, setLockedTools] = useState<string[]>([]);
   const [invoiceError, setInvoiceError] = useState<string | null>(null);
+  const [invoiceWarning, setInvoiceWarning] = useState<string | null>(null);
   const [hasLoadedInvoices, setHasLoadedInvoices] = useState(false);
   const [reports, setReports] = useState<DashboardReports | null>(null);
   const [isLoadingReports, setIsLoadingReports] = useState(false);
@@ -277,6 +281,73 @@ export function XeroApp({
     );
   }, [invoices]);
 
+  async function loadReports() {
+    setIsLoadingReports(true);
+
+    try {
+      const response = await fetch("/api/xero/dashboard");
+
+      if (response.ok) {
+        setReports((await response.json()) as DashboardReports);
+      }
+    } catch {
+      // The dashboard still renders invoice metrics without reports.
+    } finally {
+      setHasLoadedReports(true);
+      setIsLoadingReports(false);
+    }
+  }
+
+  async function loadInvoices(fresh = false) {
+    setIsLoadingInvoices(true);
+    setInvoiceError(null);
+    setInvoiceWarning(null);
+    setMessage(`${persona.agent} is requesting invoice data from Xero...`);
+
+    try {
+      const response = await fetch(
+        fresh ? "/api/xero/invoices?refresh=1" : "/api/xero/invoices",
+      );
+      const data = (await response.json()) as InvoiceResponse & {
+        error?: string;
+        detail?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(data.detail ?? data.error ?? "Invoice request failed");
+      }
+
+      setInvoices(data.invoices);
+      setHasLoadedInvoices(true);
+
+      if (data.stale) {
+        const savedAt = data.snapshotSavedAt
+          ? new Intl.DateTimeFormat("en-GB", {
+              dateStyle: "medium",
+              timeStyle: "short",
+            }).format(new Date(data.snapshotSavedAt))
+          : "an earlier successful sync";
+        const warning = `Xero is unavailable right now, so this table is using the local invoice snapshot from ${savedAt}. ${data.staleReason ?? ""}`.trim();
+
+        setInvoiceWarning(warning);
+        setMessage(`Showing cached invoice data for ${data.count} record(s).`);
+      } else {
+        setMessage(
+          `${persona.agent} found ${data.count} invoice record(s) in Xero.`,
+        );
+      }
+    } catch (error) {
+      const nextError =
+        error instanceof Error ? error.message : "Invoice request failed";
+
+      setInvoiceError(nextError);
+      setHasLoadedInvoices(true);
+      setMessage(nextError);
+    } finally {
+      setIsLoadingInvoices(false);
+    }
+  }
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const callbackError = params.get("error");
@@ -309,7 +380,11 @@ export function XeroApp({
       return;
     }
 
-    loadInvoices();
+    const timeoutId = window.setTimeout(() => {
+      void loadInvoices();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
   }, [status.isConnected, hasLoadedInvoices, isLoadingInvoices]);
 
   useEffect(() => {
@@ -317,60 +392,12 @@ export function XeroApp({
       return;
     }
 
-    loadReports();
+    const timeoutId = window.setTimeout(() => {
+      void loadReports();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
   }, [status.isConnected, hasLoadedReports, isLoadingReports]);
-
-  async function loadReports() {
-    setIsLoadingReports(true);
-
-    try {
-      const response = await fetch("/api/xero/dashboard");
-
-      if (response.ok) {
-        setReports((await response.json()) as DashboardReports);
-      }
-    } catch {
-      // The dashboard still renders invoice metrics without reports.
-    } finally {
-      setHasLoadedReports(true);
-      setIsLoadingReports(false);
-    }
-  }
-
-  async function loadInvoices(fresh = false) {
-    setIsLoadingInvoices(true);
-    setInvoiceError(null);
-    setMessage(`${persona.agent} is requesting invoice data from Xero...`);
-
-    try {
-      const response = await fetch(
-        fresh ? "/api/xero/invoices?refresh=1" : "/api/xero/invoices",
-      );
-      const data = (await response.json()) as InvoiceResponse & {
-        error?: string;
-        detail?: string;
-      };
-
-      if (!response.ok) {
-        throw new Error(data.detail ?? data.error ?? "Invoice request failed");
-      }
-
-      setInvoices(data.invoices);
-      setHasLoadedInvoices(true);
-      setMessage(
-        `${persona.agent} found ${data.count} invoice record(s) in Xero.`,
-      );
-    } catch (error) {
-      const nextError =
-        error instanceof Error ? error.message : "Invoice request failed";
-
-      setInvoiceError(nextError);
-      setHasLoadedInvoices(true);
-      setMessage(nextError);
-    } finally {
-      setIsLoadingInvoices(false);
-    }
-  }
 
   async function disconnectXero() {
     setIsDisconnecting(true);
@@ -398,6 +425,7 @@ export function XeroApp({
       }));
       setInvoices([]);
       setInvoiceError(null);
+      setInvoiceWarning(null);
       setHasLoadedInvoices(false);
       setReports(null);
       setHasLoadedReports(false);
@@ -691,8 +719,8 @@ export function XeroApp({
             isLoadingInvoices={isLoadingInvoices}
             isLoadingReports={isLoadingReports}
             invoiceError={invoiceError}
+            invoiceWarning={invoiceWarning}
             isTriggeringCashFlow={isTriggeringCashFlow}
-            loadInvoices={loadInvoices}
             metrics={metrics}
             money={money}
             reports={reports}
@@ -781,8 +809,8 @@ function DashboardView({
   isLoadingInvoices,
   isLoadingReports,
   invoiceError,
+  invoiceWarning,
   isTriggeringCashFlow,
-  loadInvoices,
   metrics,
   money,
   reports,
@@ -794,8 +822,8 @@ function DashboardView({
   isLoadingInvoices: boolean;
   isLoadingReports: boolean;
   invoiceError: string | null;
+  invoiceWarning: string | null;
   isTriggeringCashFlow: boolean;
-  loadInvoices: (fresh?: boolean) => void;
   metrics: DashboardMetrics;
   money: Intl.NumberFormat;
   reports: DashboardReports | null;
@@ -851,57 +879,21 @@ function DashboardView({
       <section className="grid gap-4 lg:grid-cols-[1fr_320px]">
         <InvoiceTable
           invoiceError={invoiceError}
+          invoiceWarning={invoiceWarning}
           invoices={invoices}
           isLoadingInvoices={isLoadingInvoices}
           money={money}
         />
         <aside className="rounded-2xl border border-[#e4d2b8] bg-[#fffaf4] p-4">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-lg font-semibold">Xero connection</h2>
-              {/* this section to remove or change */}
-              <p className="mt-1 text-sm leading-6 text-[#6f5f4b]">
-                {status.isConnected
-                  ? "Luigi can read Alice’s Xero data through the connected company."
-                  : "Connect Xero to load Alice’s roastery metrics."}
-              </p>
-            </div>
-            <span
-              className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                status.isConnected
-                  ? "bg-[#eadbc3] text-[#6f2f1f]"
-                  : "bg-[#f1e9e7] text-[#7a2f25]"
-              }`}
-            >
-              {status.isConnected ? "Live" : "Offline"}
-            </span>
-          </div>
-          <dl className="mt-5 space-y-3 text-sm">
-            <div className="flex justify-between gap-4">
-              <dt className="text-[#6f5f4b]">Company</dt>
-              <dd className="truncate font-medium">
-                {status.tenantName ?? "None"}
-              </dd>
-            </div>
-            <div className="flex justify-between gap-4">
-              <dt className="text-[#6f5f4b]">Open invoices</dt>
-              <dd className="font-medium">{metrics.openInvoices}</dd>
-            </div>
-            <div className="flex justify-between gap-4">
-              <dt className="text-[#6f5f4b]">Invoices loaded</dt>
-              <dd className="font-medium">{invoices.length}</dd>
-            </div>
-          </dl>
+          <h2 className="text-lg font-semibold">
+            Want a cash flow recommendation?
+          </h2>
+          <p className="mt-2 text-sm leading-6 text-[#6f5f4b]">
+            Send Bruno the latest invoice and dashboard context, then post the
+            recommendation straight into Slack.
+          </p>
           <button
-            className="mt-5 inline-flex h-10 w-full items-center justify-center rounded-full border border-[#cdbba1] bg-[#fffaf4] px-3 text-sm font-semibold text-[#2f2417] transition hover:bg-[#f3ead9] disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={!status.isConnected || isLoadingInvoices}
-            onClick={() => loadInvoices(true)}
-            type="button"
-          >
-            {isLoadingInvoices ? "Refreshing..." : "Refresh Xero data"}
-          </button>
-          <button
-            className="mt-3 inline-flex h-10 w-full items-center justify-center rounded-full bg-[#6f2f1f] px-3 text-sm font-semibold text-white transition hover:bg-[#572417] disabled:cursor-not-allowed disabled:opacity-50"
+            className="mt-5 inline-flex min-h-11 w-full items-center justify-center rounded-full bg-[#6f2f1f] px-4 py-2 text-center text-sm font-semibold leading-5 text-white transition hover:bg-[#572417] disabled:cursor-not-allowed disabled:opacity-50"
             disabled={!status.isConnected || isTriggeringCashFlow}
             onClick={triggerCashFlowAutomation}
             type="button"
@@ -913,6 +905,10 @@ function DashboardView({
           {cashFlowAutomationMessage ? (
             <p className="mt-3 rounded-2xl bg-[#f3ead9] px-3 py-2 text-xs leading-5 text-[#6f5f4b]">
               {cashFlowAutomationMessage}
+            </p>
+          ) : !status.isConnected ? (
+            <p className="mt-3 rounded-2xl bg-[#fff8e8] px-3 py-2 text-xs leading-5 text-[#6d4c16]">
+              Connect Xero before sending a recommendation.
             </p>
           ) : null}
         </aside>
@@ -1180,11 +1176,13 @@ const invoiceTableRowLimit = 5;
 
 function InvoiceTable({
   invoiceError,
+  invoiceWarning,
   invoices,
   isLoadingInvoices,
   money,
 }: {
   invoiceError: string | null;
+  invoiceWarning: string | null;
   invoices: Invoice[];
   isLoadingInvoices: boolean;
   money: Intl.NumberFormat;
@@ -1201,6 +1199,11 @@ function InvoiceTable({
           </p>
         ) : null}
       </div>
+      {invoiceWarning ? (
+        <div className="border-b border-[#ead0a2] bg-[#fff8e8] px-4 py-3 text-sm leading-6 text-[#6d4c16]">
+          {invoiceWarning}
+        </div>
+      ) : null}
       <div className="overflow-x-auto">
         <table className="w-full min-w-[720px] border-collapse text-left text-sm">
           <thead className="bg-[#f3ead9] text-[#6f5f4b]">
