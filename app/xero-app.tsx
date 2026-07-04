@@ -67,6 +67,7 @@ type InvoiceReview = {
   rank: number;
   invoiceNumber: string;
   contactName: string;
+  contactEmail?: string;
   amountDue: number;
   currencyCode: string;
   daysPastDue: number;
@@ -1669,7 +1670,23 @@ function InsightCard({ insight }: { insight: AgentInsight }) {
   );
 }
 
+function gmailComposeUrl(to: string, subject: string, body: string) {
+  const params = new URLSearchParams({
+    view: "cm",
+    fs: "1",
+    su: subject,
+    body,
+  });
+
+  if (to.trim()) {
+    params.set("to", to.trim());
+  }
+
+  return `https://mail.google.com/mail/?${params.toString()}`;
+}
+
 function EditableEmailDraft({ item }: { item: InvoiceReview }) {
+  const [recipient, setRecipient] = useState(item.contactEmail ?? "");
   const [subject, setSubject] = useState(item.emailSubject);
   const [body, setBody] = useState(item.emailBody);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
@@ -1693,18 +1710,43 @@ function EditableEmailDraft({ item }: { item: InvoiceReview }) {
     <div className="mt-4 rounded-2xl border border-[#e4d2b8] bg-[#fbf6ec] p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm font-semibold">Bruno’s draft nudge</p>
-        <button
-          className="inline-flex h-9 items-center justify-center rounded-full border border-[#cdbba1] bg-[#fffaf4] px-3 text-sm font-semibold text-[#2f2417] transition hover:bg-[#f3ead9]"
-          onClick={copyDraft}
-          type="button"
-        >
-          {copyState === "copied"
-            ? "Copied"
-            : copyState === "failed"
-              ? "Copy failed"
-              : "Copy email"}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            className="inline-flex h-9 items-center justify-center rounded-full border border-[#cdbba1] bg-[#fffaf4] px-3 text-sm font-semibold text-[#2f2417] transition hover:bg-[#f3ead9]"
+            onClick={copyDraft}
+            type="button"
+          >
+            {copyState === "copied"
+              ? "Copied"
+              : copyState === "failed"
+                ? "Copy failed"
+                : "Copy email"}
+          </button>
+          <a
+            className="inline-flex h-9 items-center justify-center rounded-full bg-[#6f2f1f] px-4 text-sm font-semibold text-white transition hover:bg-[#572417]"
+            href={gmailComposeUrl(recipient, subject, body)}
+            rel="noreferrer"
+            target="_blank"
+          >
+            Send via Gmail
+          </a>
+        </div>
       </div>
+
+      <label
+        className="mt-4 block text-sm font-medium"
+        htmlFor={`recipient-${item.rank}`}
+      >
+        To
+      </label>
+      <input
+        className="mt-2 h-10 w-full rounded-full border border-[#cdbba1] bg-[#fffaf4] px-3 text-sm outline-none transition placeholder:text-[#a3907a] focus:border-[#6f2f1f] focus:ring-2 focus:ring-[#eadbc3]"
+        id={`recipient-${item.rank}`}
+        onChange={(event) => setRecipient(event.target.value)}
+        placeholder={`${item.contactName}'s email address`}
+        type="email"
+        value={recipient}
+      />
 
       <label
         className="mt-4 block text-sm font-medium"

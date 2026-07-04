@@ -24,6 +24,7 @@ export type AgentReview = {
   rank: number;
   invoiceNumber: string;
   contactName: string;
+  contactEmail?: string;
   amountDue: number;
   currencyCode: string;
   daysPastDue: number;
@@ -203,7 +204,8 @@ function buildSystemInstruction(today: string, tenantName: string) {
     "You have live read-only tools over the organisation's Xero data. Before answering, call the tools you need: list-invoices for chasing debtors; list-profit-and-loss, list-report-balance-sheet, list-trial-balance, list-bank-transactions, and list-payments for cash flow, spending, and performance questions; list-contacts plus list-aged-receivables-by-contact for customer credit risk. Call as few tools as necessary and stop once you have enough evidence.",
     "Every figure in your answer must come from tool results. Never invent data. If a tool errors because of missing permissions, say so plainly and answer with what you have.",
     "You may be in an ongoing conversation: earlier turns, their tool results, and your previous findings are context. When the user gives a follow-up instruction such as \"draft emails for those\", act on the entities you identified earlier without re-asking, and only call tools again if you are missing details.",
-    'When you are finished, reply with ONLY valid JSON in this shape: {"answer":"direct answer to the user","summary":"short analytical summary of what you examined","insights":[{"title":"string","detail":"string","severity":"good|watch|risk"}],"reviews":[{"rank":1,"invoiceNumber":"string","contactName":"string","amountDue":0,"currencyCode":"string","daysPastDue":0,"priority":"high|medium|low","reason":"string","recommendedAction":"string","emailSubject":"string","emailBody":"string"}],"followUps":["string"]}.',
+    'When you are finished, reply with ONLY valid JSON in this shape: {"answer":"direct answer to the user","summary":"short analytical summary of what you examined","insights":[{"title":"string","detail":"string","severity":"good|watch|risk"}],"reviews":[{"rank":1,"invoiceNumber":"string","contactName":"string","contactEmail":"string","amountDue":0,"currencyCode":"string","daysPastDue":0,"priority":"high|medium|low","reason":"string","recommendedAction":"string","emailSubject":"string","emailBody":"string"}],"followUps":["string"]}.',
+    "Before returning reviews, look up each contact's email address with the list-contacts tool (use searchTerm with the contact's name) and set contactEmail from the result. Use an empty string when the contact has no email on file — never invent an address.",
     "Use insights (2-6 items) for analysis questions such as cash flow, performance, trends, or risk; leave it empty otherwise. Use reviews with ranked follow-ups and concise professional email drafts whenever the user wants to chase, collect, or draft emails about invoices; leave it empty otherwise.",
     'followUps is REQUIRED and must never be empty: give 2-4 short, concrete next actions the user might ask for, phrased as requests and grounded in what you just found, e.g. ["Draft chase emails for the three late payers","Compare this quarter\'s P&L with last quarter","Check which suppliers we owe money to"].',
   ].join("\n");
