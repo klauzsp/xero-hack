@@ -6,6 +6,7 @@ export type XeroInvoiceSummary = {
   invoiceID?: string;
   invoiceNumber?: string;
   contactName?: string;
+  type?: string;
   status?: string;
   date?: string;
   dueDate?: string;
@@ -55,7 +56,44 @@ export function getErrorDetail(error: unknown) {
   return "Unknown error";
 }
 
-export async function fetchXeroInvoices(pageSize = 50) {
+type InvoiceFetchResult = Awaited<ReturnType<typeof fetchXeroInvoicesUncached>>;
+
+// Short-lived cache: the dashboard, review, and agent flows all want the same
+// invoice list, and Xero enforces per-minute and concurrency rate limits.
+const invoiceCacheTtlMs = 60_000;
+let invoiceCache: {
+  at: number;
+  pageSize: number;
+  result: InvoiceFetchResult;
+} | null = null;
+
+export function clearXeroInvoiceCache() {
+  invoiceCache = null;
+}
+
+export async function fetchXeroInvoices(
+  pageSize = 50,
+  options?: { fresh?: boolean },
+) {
+  if (
+    !options?.fresh &&
+    invoiceCache &&
+    invoiceCache.pageSize >= pageSize &&
+    Date.now() - invoiceCache.at < invoiceCacheTtlMs
+  ) {
+    return invoiceCache.result;
+  }
+
+  const result = await fetchXeroInvoicesUncached(pageSize);
+
+  if (result.ok) {
+    invoiceCache = { at: Date.now(), pageSize, result };
+  }
+
+  return result;
+}
+
+async function fetchXeroInvoicesUncached(pageSize: number) {
   if (process.env.XERO_USE_MCP !== "false") {
     console.log("[Xero] Using MCP path");
     return fetchXeroInvoicesViaMcp(pageSize);
@@ -127,6 +165,7 @@ export async function fetchXeroInvoices(pageSize = 50) {
       invoiceID: invoice.invoiceID,
       invoiceNumber: invoice.invoiceNumber,
       contactName: invoice.contact?.name,
+      type: invoice.type ? String(invoice.type) : undefined,
       status: invoice.status ? String(invoice.status) : undefined,
       date: invoice.date,
       dueDate: invoice.dueDate,

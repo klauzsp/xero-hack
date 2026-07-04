@@ -185,6 +185,7 @@ function parseInvoiceText(text: string): XeroInvoiceSummary {
     invoiceID: getValue("Invoice ID"),
     invoiceNumber: getValue("Invoice"),
     contactName: getValue("Contact")?.replace(/\s+\([^)]+\)$/, ""),
+    type: getValue("Type"),
     status: getValue("Status"),
     date: getValue("Date"),
     dueDate: getValue("Due Date"),
@@ -204,35 +205,49 @@ export async function fetchXeroInvoicesViaMcp(pageSize = 50) {
   const session = await openXeroMcpSession(tokenResult.accessToken);
 
   try {
+    // The MCP server returns 10 invoices per page. Fetch pages in parallel
+    // batches of 4 — Xero rejects too many concurrent requests, but batching
+    // still cuts wall time to a few round-trips instead of pageSize / 10.
+    const pageCount = Math.ceil(pageSize / 10);
+    const batchSize = 4;
     const invoices: XeroInvoiceSummary[] = [];
-    let page = 1;
+    let reachedEnd = false;
 
-    while (invoices.length < pageSize) {
-      const result = await session.client.callTool({
-        name: "list-invoices",
-        arguments: { page },
-      });
-      const textContent = getTextContent(result.content);
-      const toolError = textContent.find((item) =>
-        item.text.startsWith("Error listing invoices:"),
+    for (let start = 1; start <= pageCount && !reachedEnd; start += batchSize) {
+      const pages = Array.from(
+        { length: Math.min(batchSize, pageCount - start + 1) },
+        (_, offset) => start + offset,
+      );
+      const pageResults = await Promise.all(
+        pages.map((page) =>
+          session.client.callTool({
+            name: "list-invoices",
+            arguments: { page },
+          }),
+        ),
       );
 
-      if (toolError) {
-        throw new Error(toolError.text);
+      for (const result of pageResults) {
+        const textContent = getTextContent(result.content);
+        const toolError = textContent.find((item) =>
+          item.text.startsWith("Error listing invoices:"),
+        );
+
+        if (toolError) {
+          throw new Error(toolError.text);
+        }
+
+        const pageInvoices = textContent
+          .map((item) => item.text)
+          .filter((text) => text.startsWith("Invoice ID: "))
+          .map(parseInvoiceText);
+
+        invoices.push(...pageInvoices);
+
+        if (pageInvoices.length < 10) {
+          reachedEnd = true;
+        }
       }
-
-      const pageInvoices = textContent
-        .map((item) => item.text)
-        .filter((text) => text.startsWith("Invoice ID: "))
-        .map(parseInvoiceText);
-
-      invoices.push(...pageInvoices);
-
-      if (pageInvoices.length < 10) {
-        break;
-      }
-
-      page += 1;
     }
 
     const trimmedInvoices = invoices.slice(0, pageSize);

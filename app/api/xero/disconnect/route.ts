@@ -1,4 +1,6 @@
 import { createXeroClient } from "@/lib/xeroClient";
+import { clearXeroInvoiceCache } from "@/lib/xeroInvoices";
+import { clearXeroReportsCache } from "@/lib/xeroReports";
 import {
   clearXeroConnection,
   getXeroConnection,
@@ -25,6 +27,8 @@ export async function POST() {
 
   if (!connection.isConnected || !connection.tokenSet) {
     clearXeroConnection();
+    clearXeroInvoiceCache();
+    clearXeroReportsCache();
 
     return Response.json({ isConnected: false });
   }
@@ -68,6 +72,8 @@ export async function POST() {
 
     await xero.disconnect(connectionId);
     clearXeroConnection();
+    clearXeroInvoiceCache();
+    clearXeroReportsCache();
 
     return Response.json({ isConnected: false });
   } catch (error) {

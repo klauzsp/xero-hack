@@ -19,6 +19,7 @@ type Invoice = {
   invoiceID?: string;
   invoiceNumber?: string;
   contactName?: string;
+  type?: string;
   status?: string;
   date?: string;
   dueDate?: string;
@@ -34,10 +35,29 @@ type InvoiceResponse = {
 
 type DashboardMetrics = {
   totalInvoiced: number;
-  amountDue: number;
+  receivablesDue: number;
+  payablesDue: number;
   amountPaid: number;
   openInvoices: number;
   overdueInvoices: number;
+};
+
+type PnlMonth = {
+  label: string;
+  income: number;
+  expenses: number;
+  netProfit: number;
+};
+
+type BankAccountBalance = {
+  name: string;
+  balance: number;
+};
+
+type DashboardReports = {
+  pnl: { months: PnlMonth[] } | null;
+  bank: { accounts: BankAccountBalance[]; total: number } | null;
+  netAssets: number | null;
 };
 
 type InvoiceReview = {
@@ -137,6 +157,18 @@ const agentToolSources: Record<string, string> = {
 
 const invoiceScopes = ["accounting.invoices.read", "accounting.invoices"];
 
+function formatInvoiceDate(value: string) {
+  const parsed = new Date(value);
+
+  return Number.isNaN(parsed.getTime())
+    ? value
+    : parsed.toLocaleDateString("en-GB", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      });
+}
+
 const initialStatus: Status = {
   isConfigured: false,
   missingConfig: [],
@@ -147,7 +179,13 @@ const initialStatus: Status = {
   scopes: [],
 };
 
-export function XeroApp({ view }: { view: AppView }) {
+export function XeroApp({
+  initialQuestion = "",
+  view,
+}: {
+  initialQuestion?: string;
+  view: AppView;
+}) {
   const [status, setStatus] = useState<Status>(initialStatus);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [message, setMessage] = useState("Checking local configuration...");
@@ -159,6 +197,9 @@ export function XeroApp({ view }: { view: AppView }) {
   const [lockedTools, setLockedTools] = useState<string[]>([]);
   const [invoiceError, setInvoiceError] = useState<string | null>(null);
   const [hasLoadedInvoices, setHasLoadedInvoices] = useState(false);
+  const [reports, setReports] = useState<DashboardReports | null>(null);
+  const [isLoadingReports, setIsLoadingReports] = useState(false);
+  const [hasLoadedReports, setHasLoadedReports] = useState(false);
   const traceIdRef = useRef(0);
   const turnIdRef = useRef(0);
   const interactionIdRef = useRef<string | null>(null);
@@ -182,9 +223,16 @@ export function XeroApp({ view }: { view: AppView }) {
         const total = invoice.total ?? 0;
         const due = invoice.amountDue ?? 0;
         const dueDate = invoice.dueDate ? new Date(invoice.dueDate) : null;
+        const isPayable = invoice.type === "ACCPAY";
+
+        if (isPayable) {
+          nextMetrics.payablesDue += due;
+
+          return nextMetrics;
+        }
 
         nextMetrics.totalInvoiced += total;
-        nextMetrics.amountDue += due;
+        nextMetrics.receivablesDue += due;
         nextMetrics.amountPaid += Math.max(total - due, 0);
 
         if (due > 0) {
@@ -199,7 +247,8 @@ export function XeroApp({ view }: { view: AppView }) {
       },
       {
         totalInvoiced: 0,
-        amountDue: 0,
+        receivablesDue: 0,
+        payablesDue: 0,
         amountPaid: 0,
         openInvoices: 0,
         overdueInvoices: 0,
@@ -240,13 +289,40 @@ export function XeroApp({ view }: { view: AppView }) {
     loadInvoices();
   }, [status.isConnected, hasLoadedInvoices, isLoadingInvoices]);
 
-  async function loadInvoices() {
+  useEffect(() => {
+    if (!status.isConnected || hasLoadedReports || isLoadingReports) {
+      return;
+    }
+
+    loadReports();
+  }, [status.isConnected, hasLoadedReports, isLoadingReports]);
+
+  async function loadReports() {
+    setIsLoadingReports(true);
+
+    try {
+      const response = await fetch("/api/xero/dashboard");
+
+      if (response.ok) {
+        setReports((await response.json()) as DashboardReports);
+      }
+    } catch {
+      // The dashboard still renders invoice metrics without reports.
+    } finally {
+      setHasLoadedReports(true);
+      setIsLoadingReports(false);
+    }
+  }
+
+  async function loadInvoices(fresh = false) {
     setIsLoadingInvoices(true);
     setInvoiceError(null);
     setMessage("Requesting invoices from Xero...");
 
     try {
-      const response = await fetch("/api/xero/invoices");
+      const response = await fetch(
+        fresh ? "/api/xero/invoices?refresh=1" : "/api/xero/invoices",
+      );
       const data = (await response.json()) as InvoiceResponse & {
         error?: string;
         detail?: string;
@@ -295,6 +371,8 @@ export function XeroApp({ view }: { view: AppView }) {
       setInvoices([]);
       setInvoiceError(null);
       setHasLoadedInvoices(false);
+      setReports(null);
+      setHasLoadedReports(false);
       setMessage("Disconnected from Xero and cleared the local session.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Disconnect failed");
@@ -497,15 +575,18 @@ export function XeroApp({ view }: { view: AppView }) {
           <DashboardView
             invoices={invoices}
             isLoadingInvoices={isLoadingInvoices}
+            isLoadingReports={isLoadingReports}
             invoiceError={invoiceError}
             loadInvoices={loadInvoices}
             metrics={metrics}
             money={money}
+            reports={reports}
             status={status}
           />
         ) : (
           <ReviewView
             agentTurns={agentTurns}
+            initialQuestion={initialQuestion}
             invoices={invoices}
             isAgentRunning={isAgentRunning}
             lockedTools={lockedTools}
@@ -575,27 +656,67 @@ function StatusBanner({ message, status }: { message: string; status: Status }) 
 function DashboardView({
   invoices,
   isLoadingInvoices,
+  isLoadingReports,
   invoiceError,
   loadInvoices,
   metrics,
   money,
+  reports,
   status,
 }: {
   invoices: Invoice[];
   isLoadingInvoices: boolean;
+  isLoadingReports: boolean;
   invoiceError: string | null;
-  loadInvoices: () => void;
+  loadInvoices: (fresh?: boolean) => void;
   metrics: DashboardMetrics;
   money: Intl.NumberFormat;
+  reports: DashboardReports | null;
   status: Status;
 }) {
   return (
     <>
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Total invoiced" value={money.format(metrics.totalInvoiced)} />
-        <MetricCard label="Amount due" value={money.format(metrics.amountDue)} />
-        <MetricCard label="Paid" value={money.format(metrics.amountPaid)} />
-        <MetricCard label="Overdue invoices" value={String(metrics.overdueInvoices)} />
+        <MetricCard
+          label="Bank balance"
+          question="Is our bank balance healthy given our upcoming bills?"
+          value={
+            reports?.bank
+              ? money.format(reports.bank.total)
+              : isLoadingReports
+                ? "..."
+                : "—"
+          }
+        />
+        <MetricCard
+          label="Owed to you"
+          question="Who owes us money and who should we chase first?"
+          value={money.format(metrics.receivablesDue)}
+        />
+        <MetricCard
+          label="You owe"
+          question="Which bills do we owe and which should we pay first?"
+          value={money.format(metrics.payablesDue)}
+        />
+        <MetricCard
+          label="Overdue invoices"
+          question="Draft chase emails for our overdue invoices"
+          value={String(metrics.overdueInvoices)}
+        />
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-2">
+        <PnlCard
+          isLoadingReports={isLoadingReports}
+          money={money}
+          pnl={reports?.pnl ?? null}
+        />
+        <BankCard
+          bank={reports?.bank ?? null}
+          isLoadingReports={isLoadingReports}
+          money={money}
+          netAssets={reports?.netAssets ?? null}
+        />
       </section>
 
       <section className="grid gap-4 lg:grid-cols-[1fr_320px]">
@@ -642,7 +763,7 @@ function DashboardView({
           <button
             className="mt-5 inline-flex h-10 w-full items-center justify-center rounded-md border border-[#b9c3b7] bg-white px-3 text-sm font-semibold text-[#17211b] transition hover:bg-[#eef2ec] disabled:cursor-not-allowed disabled:opacity-50"
             disabled={!status.isConnected || isLoadingInvoices}
-            onClick={loadInvoices}
+            onClick={() => loadInvoices(true)}
             type="button"
           >
             {isLoadingInvoices ? "Refreshing..." : "Refresh invoices"}
@@ -653,14 +774,254 @@ function DashboardView({
   );
 }
 
-function MetricCard({ label, value }: { label: string; value: string }) {
+function MetricCard({
+  label,
+  question,
+  value,
+}: {
+  label: string;
+  question?: string;
+  value: string;
+}) {
+  const body = (
+    <>
+      <p className="flex items-center justify-between gap-2 text-sm text-[#526157]">
+        {label}
+        {question ? (
+          <span aria-hidden className="text-xs text-[#8b978e]">
+            Ask the agent →
+          </span>
+        ) : null}
+      </p>
+      <p className="mt-2 text-2xl font-semibold">{value}</p>
+    </>
+  );
+
+  if (!question) {
+    return (
+      <div className="rounded-md border border-[#d7ddd4] bg-white p-4">{body}</div>
+    );
+  }
+
+  return (
+    <Link
+      className="rounded-md border border-[#d7ddd4] bg-white p-4 transition hover:border-[#0f6f4d] hover:shadow-sm"
+      href={`/review?q=${encodeURIComponent(question)}`}
+    >
+      {body}
+    </Link>
+  );
+}
+
+const pnlSeriesColors = {
+  income: "#00875a",
+  expenses: "#2a78d6",
+};
+
+function PnlCard({
+  isLoadingReports,
+  money,
+  pnl,
+}: {
+  isLoadingReports: boolean;
+  money: Intl.NumberFormat;
+  pnl: { months: PnlMonth[] } | null;
+}) {
+  const latest = pnl?.months[pnl.months.length - 1];
+  const previous = pnl && pnl.months.length > 1 ? pnl.months[pnl.months.length - 2] : null;
+  const delta = latest && previous ? latest.netProfit - previous.netProfit : null;
+
   return (
     <div className="rounded-md border border-[#d7ddd4] bg-white p-4">
-      <p className="text-sm text-[#526157]">{label}</p>
-      <p className="mt-2 text-2xl font-semibold">{value}</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-semibold">Profit &amp; loss</h2>
+          <p className="mt-1 text-sm text-[#526157]">Last 3 months</p>
+        </div>
+        {latest ? (
+          <div className="text-right">
+            <p className="text-sm text-[#526157]">Net profit ({latest.label})</p>
+            <p className="text-xl font-semibold">{money.format(latest.netProfit)}</p>
+            {delta !== null ? (
+              <p
+                className={`text-xs font-semibold ${
+                  delta >= 0 ? "text-[#0f6f4d]" : "text-[#7a2f25]"
+                }`}
+              >
+                {delta >= 0 ? "▲" : "▼"} {money.format(Math.abs(delta))} vs{" "}
+                {previous?.label}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      {pnl && pnl.months.length > 0 ? (
+        <PnlChart money={money} months={pnl.months} />
+      ) : (
+        <p className="mt-8 text-sm text-[#526157]">
+          {isLoadingReports
+            ? "Loading profit & loss..."
+            : "Profit & loss is unavailable. Reconnect to Xero to grant report access."}
+        </p>
+      )}
     </div>
   );
 }
+
+function PnlChart({
+  money,
+  months,
+}: {
+  money: Intl.NumberFormat;
+  months: PnlMonth[];
+}) {
+  const max = Math.max(
+    ...months.flatMap((month) => [month.income, month.expenses]),
+    1,
+  );
+  const barHeight = (value: number) =>
+    value > 0 ? Math.max(Math.round((value / max) * 120), 3) : 0;
+
+  return (
+    <div className="mt-5">
+      <div className="flex items-end gap-6 border-b border-[#e1e0d9] px-2">
+        {months.map((month) => (
+          <div
+            className="group relative flex flex-1 flex-col items-center"
+            key={month.label}
+          >
+            <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 hidden w-max -translate-x-1/2 rounded-md border border-[#d7ddd4] bg-white px-3 py-2 text-xs shadow-md group-hover:block">
+              <p className="font-semibold text-[#17211b]">{month.label}</p>
+              <p className="mt-1 flex items-center gap-1.5 text-[#526157]">
+                <span
+                  aria-hidden
+                  className="h-2 w-2 rounded-full"
+                  style={{ backgroundColor: pnlSeriesColors.income }}
+                />
+                Income {money.format(month.income)}
+              </p>
+              <p className="mt-0.5 flex items-center gap-1.5 text-[#526157]">
+                <span
+                  aria-hidden
+                  className="h-2 w-2 rounded-full"
+                  style={{ backgroundColor: pnlSeriesColors.expenses }}
+                />
+                Expenses {money.format(month.expenses)}
+              </p>
+              <p className="mt-0.5 text-[#526157]">
+                Net {money.format(month.netProfit)}
+              </p>
+            </div>
+            <div className="flex h-[120px] w-full items-end justify-center gap-[2px]">
+              <div
+                className="w-5 rounded-t-[4px]"
+                style={{
+                  backgroundColor: pnlSeriesColors.income,
+                  height: barHeight(month.income),
+                }}
+              />
+              <div
+                className="w-5 rounded-t-[4px]"
+                style={{
+                  backgroundColor: pnlSeriesColors.expenses,
+                  height: barHeight(month.expenses),
+                }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex gap-6 px-2">
+        {months.map((month) => (
+          <p
+            className="flex-1 pt-2 text-center text-xs text-[#8b978e]"
+            key={month.label}
+          >
+            {month.label}
+          </p>
+        ))}
+      </div>
+      <div className="mt-3 flex items-center gap-4 text-xs text-[#526157]">
+        <span className="flex items-center gap-1.5">
+          <span
+            aria-hidden
+            className="h-2 w-2 rounded-full"
+            style={{ backgroundColor: pnlSeriesColors.income }}
+          />
+          Income
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span
+            aria-hidden
+            className="h-2 w-2 rounded-full"
+            style={{ backgroundColor: pnlSeriesColors.expenses }}
+          />
+          Expenses
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function BankCard({
+  bank,
+  isLoadingReports,
+  money,
+  netAssets,
+}: {
+  bank: { accounts: BankAccountBalance[]; total: number } | null;
+  isLoadingReports: boolean;
+  money: Intl.NumberFormat;
+  netAssets: number | null;
+}) {
+  return (
+    <div className="rounded-md border border-[#d7ddd4] bg-white p-4">
+      <h2 className="text-lg font-semibold">Bank accounts</h2>
+      <p className="mt-1 text-sm text-[#526157]">
+        Balances from today&apos;s balance sheet
+      </p>
+
+      {bank ? (
+        <div className="mt-4">
+          <ul className="divide-y divide-[#edf0eb]">
+            {bank.accounts.map((account) => (
+              <li
+                className="flex items-center justify-between gap-4 py-3 text-sm"
+                key={account.name}
+              >
+                <span className="truncate text-[#17211b]">{account.name}</span>
+                <span className="font-semibold">
+                  {money.format(account.balance)}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <div className="flex items-center justify-between gap-4 border-t border-[#d7ddd4] py-3 text-sm">
+            <span className="font-semibold text-[#17211b]">Total</span>
+            <span className="font-semibold">{money.format(bank.total)}</span>
+          </div>
+          {netAssets !== null ? (
+            <div className="flex items-center justify-between gap-4 rounded-md bg-[#eef2ec] px-3 py-2.5 text-sm">
+              <span className="text-[#526157]">Net assets</span>
+              <span className="font-semibold text-[#0f6f4d]">
+                {money.format(netAssets)}
+              </span>
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <p className="mt-8 text-sm text-[#526157]">
+          {isLoadingReports
+            ? "Loading bank balances..."
+            : "Bank balances are unavailable. Reconnect to Xero to grant report access."}
+        </p>
+      )}
+    </div>
+  );
+}
+
+const invoiceTableRowLimit = 5;
 
 function InvoiceTable({
   invoiceError,
@@ -673,10 +1034,17 @@ function InvoiceTable({
   isLoadingInvoices: boolean;
   money: Intl.NumberFormat;
 }) {
+  const visibleInvoices = invoices.slice(0, invoiceTableRowLimit);
+
   return (
     <section className="rounded-md border border-[#d7ddd4] bg-white">
-      <div className="border-b border-[#d7ddd4] px-4 py-3">
+      <div className="flex items-baseline justify-between gap-4 border-b border-[#d7ddd4] px-4 py-3">
         <h2 className="text-lg font-semibold">Recent invoices</h2>
+        {invoices.length > invoiceTableRowLimit ? (
+          <p className="text-xs text-[#8b978e]">
+            Showing {invoiceTableRowLimit} of {invoices.length}
+          </p>
+        ) : null}
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[720px] border-collapse text-left text-sm">
@@ -710,7 +1078,7 @@ function InvoiceTable({
                 </td>
               </tr>
             ) : (
-              invoices.map((invoice) => (
+              visibleInvoices.map((invoice) => (
                 <tr
                   className="border-t border-[#edf0eb]"
                   key={invoice.invoiceID ?? invoice.invoiceNumber}
@@ -720,7 +1088,9 @@ function InvoiceTable({
                   </td>
                   <td className="px-4 py-3">{invoice.contactName ?? "Unknown"}</td>
                   <td className="px-4 py-3">{invoice.status ?? "-"}</td>
-                  <td className="px-4 py-3">{invoice.dueDate ?? "-"}</td>
+                  <td className="px-4 py-3">
+                    {invoice.dueDate ? formatInvoiceDate(invoice.dueDate) : "-"}
+                  </td>
                   <td className="px-4 py-3 text-right">
                     {typeof invoice.total === "number"
                       ? money.format(invoice.total)
@@ -743,6 +1113,7 @@ function InvoiceTable({
 
 function ReviewView({
   agentTurns,
+  initialQuestion,
   invoices,
   isAgentRunning,
   lockedTools,
@@ -751,6 +1122,7 @@ function ReviewView({
   status,
 }: {
   agentTurns: AgentTurn[];
+  initialQuestion: string;
   invoices: Invoice[];
   isAgentRunning: boolean;
   lockedTools: string[];
@@ -758,7 +1130,7 @@ function ReviewView({
   runAgent: (question?: string) => Promise<void>;
   status: Status;
 }) {
-  const [question, setQuestion] = useState("");
+  const [question, setQuestion] = useState(initialQuestion);
   const suggestionButtons = [
     "Chase overdue invoices",
     "Analyse our cash flow position",
