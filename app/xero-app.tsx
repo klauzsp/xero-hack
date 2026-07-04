@@ -88,45 +88,52 @@ type AgentTraceStep = {
   kind: "status" | "tool" | "error";
   tool?: string;
   label: string;
-  detail?: string;
-  done: boolean;
 };
 
+// Playful spinner copy while a tool runs; the plain-English source names
+// below feed the sober "Checked: ..." summary once the turn finishes.
 const agentToolLabels: Record<string, string> = {
-  "list-invoices": "Scanning invoices",
-  "list-contacts": "Looking up contacts",
-  "list-contact-groups": "Looking up contact groups",
-  "list-accounts": "Reading chart of accounts",
-  "list-items": "Reading inventory items",
-  "list-tax-rates": "Reading tax rates",
-  "list-organisation-details": "Reading organisation details",
-  "list-tracking-categories": "Reading tracking categories",
-  "list-payments": "Reviewing payments",
-  "list-bank-transactions": "Reviewing bank transactions",
-  "list-credit-notes": "Checking credit notes",
-  "list-quotes": "Checking quotes",
-  "list-manual-journals": "Checking manual journals",
-  "list-profit-and-loss": "Reading profit & loss",
-  "list-report-balance-sheet": "Reading balance sheet",
-  "list-trial-balance": "Reading trial balance",
-  "list-aged-receivables-by-contact": "Checking aged receivables",
-  "list-aged-payables-by-contact": "Checking aged payables",
+  "list-invoices": "Shaking the invoice tree...",
+  "list-contacts": "Flipping through the address book...",
+  "list-contact-groups": "Sorting contacts into cliques...",
+  "list-accounts": "Dusting off the chart of accounts...",
+  "list-items": "Counting things in the stockroom...",
+  "list-tax-rates": "Consulting the sacred tax tables...",
+  "list-organisation-details": "Polishing the company nameplate...",
+  "list-tracking-categories": "Untangling the tracking categories...",
+  "list-payments": "Following the money...",
+  "list-bank-transactions": "Snooping through the bank statement...",
+  "list-credit-notes": "Counting the IOUs...",
+  "list-quotes": "Digging up old quotes...",
+  "list-manual-journals": "Deciphering the manual journals...",
+  "list-profit-and-loss": "Peeking at the P&L (fingers crossed)...",
+  "list-report-balance-sheet": "Making sure the balance sheet balances...",
+  "list-trial-balance": "Giving the trial balance a stern look...",
+  "list-aged-receivables-by-contact": "Working out who owes you money...",
+  "list-aged-payables-by-contact": "Working out who you owe money to...",
 };
 
-function describeToolArgs(args?: Record<string, unknown>) {
-  if (!args) {
-    return undefined;
-  }
+const agentToolSources: Record<string, string> = {
+  "list-invoices": "invoices",
+  "list-contacts": "contacts",
+  "list-contact-groups": "contact groups",
+  "list-accounts": "chart of accounts",
+  "list-items": "items",
+  "list-tax-rates": "tax rates",
+  "list-organisation-details": "organisation details",
+  "list-tracking-categories": "tracking categories",
+  "list-payments": "payments",
+  "list-bank-transactions": "bank transactions",
+  "list-credit-notes": "credit notes",
+  "list-quotes": "quotes",
+  "list-manual-journals": "manual journals",
+  "list-profit-and-loss": "profit & loss",
+  "list-report-balance-sheet": "balance sheet",
+  "list-trial-balance": "trial balance",
+  "list-aged-receivables-by-contact": "aged receivables",
+  "list-aged-payables-by-contact": "aged payables",
+};
 
-  const parts = Object.entries(args)
-    .filter(
-      ([, value]) =>
-        value !== undefined && value !== null && typeof value !== "object",
-    )
-    .map(([key, value]) => `${key}: ${String(value)}`);
-
-  return parts.length > 0 ? parts.join(" · ") : undefined;
-}
 
 const invoiceScopes = ["accounting.invoices.read", "accounting.invoices"];
 
@@ -317,46 +324,19 @@ export function XeroApp({ view }: { view: AppView }) {
   function handleAgentEvent(event: AgentStreamEvent) {
     switch (event.type) {
       case "status":
-        appendTraceStep({ kind: "status", label: event.message, done: true });
+        appendTraceStep({ kind: "status", label: event.message });
         break;
       case "abilities":
         setLockedTools(event.locked);
-        appendTraceStep({
-          kind: "status",
-          label: `Agent loaded ${event.tools.length} Xero abilities`,
-          detail:
-            event.locked.length > 0
-              ? `${event.locked.length} more unlock after reconnecting with wider scopes`
-              : undefined,
-          done: true,
-        });
         break;
       case "tool_call":
         appendTraceStep({
           kind: "tool",
           tool: event.tool,
           label: agentToolLabels[event.tool] ?? event.tool,
-          detail: describeToolArgs(event.args),
-          done: false,
         });
         break;
       case "tool_result":
-        updateLastTurn((turn) => {
-          for (let index = turn.steps.length - 1; index >= 0; index--) {
-            const step = turn.steps[index];
-
-            if (step.kind === "tool" && step.tool === event.tool && !step.done) {
-              return {
-                ...turn,
-                steps: turn.steps.map((nextStep, nextIndex) =>
-                  nextIndex === index ? { ...nextStep, done: true } : nextStep,
-                ),
-              };
-            }
-          }
-
-          return turn;
-        });
         break;
       case "answer": {
         const insightCount = event.result.insights?.length ?? 0;
@@ -373,7 +353,7 @@ export function XeroApp({ view }: { view: AppView }) {
         break;
       }
       case "error":
-        appendTraceStep({ kind: "error", label: event.message, done: true });
+        appendTraceStep({ kind: "error", label: event.message });
         setMessage(event.message);
         break;
     }
@@ -446,7 +426,7 @@ export function XeroApp({ view }: { view: AppView }) {
       const nextMessage =
         error instanceof Error ? error.message : "Agent request failed";
 
-      appendTraceStep({ kind: "error", label: nextMessage, done: true });
+      appendTraceStep({ kind: "error", label: nextMessage });
       setMessage(nextMessage);
     } finally {
       setIsAgentRunning(false);
@@ -907,12 +887,10 @@ function ReviewView({
               {turn.question}
             </div>
 
-            {turn.steps.length > 0 ? (
-              <AgentTrace
-                isAgentRunning={isAgentRunning && isLastTurn && !turn.result}
-                steps={turn.steps}
-              />
-            ) : null}
+            <AgentProgress
+              isRunning={isAgentRunning && isLastTurn && !turn.result}
+              steps={turn.steps}
+            />
 
             {turn.result ? (
               <div className="rounded-md border border-[#d7ddd4] bg-white">
@@ -992,24 +970,29 @@ function ReviewView({
               </article>
                   ))}
                 </div>
-                {isLastTurn && followUps.length > 0 ? (
+                {isLastTurn ? (
                   <div className="border-t border-[#edf0eb] px-5 py-4">
-                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#8b978e]">
-                      Suggested next steps
-                    </p>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {followUps.map((followUp) => (
-                        <button
-                          className="inline-flex min-h-9 items-center justify-center rounded-md border border-[#cfe4da] bg-[#f4f9f6] px-3 py-1.5 text-left text-sm font-medium text-[#0f6f4d] transition hover:bg-[#e6eee9] disabled:cursor-not-allowed disabled:opacity-50"
-                          disabled={isAgentRunning}
-                          key={followUp}
-                          onClick={() => void runAgent(followUp)}
-                          type="button"
-                        >
-                          {followUp}
-                        </button>
-                      ))}
-                    </div>
+                    {followUps.length > 0 ? (
+                      <>
+                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#8b978e]">
+                          Suggested next steps
+                        </p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {followUps.map((followUp) => (
+                            <button
+                              className="inline-flex min-h-9 items-center justify-center rounded-md border border-[#cfe4da] bg-[#f4f9f6] px-3 py-1.5 text-left text-sm font-medium text-[#0f6f4d] transition hover:bg-[#e6eee9] disabled:cursor-not-allowed disabled:opacity-50"
+                              disabled={isAgentRunning}
+                              key={followUp}
+                              onClick={() => void runAgent(followUp)}
+                              type="button"
+                            >
+                              {followUp}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    ) : null}
+                    <FollowUpForm disabled={isAgentRunning} runAgent={runAgent} />
                   </div>
                 ) : null}
               </div>
@@ -1021,57 +1004,98 @@ function ReviewView({
   );
 }
 
-function AgentTrace({
-  isAgentRunning,
+function FollowUpForm({
+  disabled,
+  runAgent,
+}: {
+  disabled: boolean;
+  runAgent: (question?: string) => Promise<void>;
+}) {
+  const [followUp, setFollowUp] = useState("");
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const next = followUp.trim();
+
+    if (!next) {
+      return;
+    }
+
+    setFollowUp("");
+    await runAgent(next);
+  }
+
+  return (
+    <form className="mt-3 flex flex-col gap-2 sm:flex-row" onSubmit={submit}>
+      <input
+        className="h-10 min-w-0 flex-1 rounded-md border border-[#b9c3b7] bg-white px-3 text-sm outline-none transition placeholder:text-[#8b978e] focus:border-[#0f6f4d] focus:ring-2 focus:ring-[#cfe4da]"
+        disabled={disabled}
+        onChange={(event) => setFollowUp(event.target.value)}
+        placeholder="Or type your own follow-up..."
+        type="text"
+        value={followUp}
+      />
+      <button
+        className="inline-flex h-10 items-center justify-center rounded-md bg-[#0f6f4d] px-4 text-sm font-semibold text-white transition hover:bg-[#0b5d40] disabled:cursor-not-allowed disabled:opacity-50"
+        disabled={disabled || !followUp.trim()}
+        type="submit"
+      >
+        Ask
+      </button>
+    </form>
+  );
+}
+
+function AgentProgress({
+  isRunning,
   steps,
 }: {
-  isAgentRunning: boolean;
+  isRunning: boolean;
   steps: AgentTraceStep[];
 }) {
-  return (
-    <div className="rounded-md border border-[#d7ddd4] bg-white p-5">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Agent activity</h2>
+  const errors = steps.filter((step) => step.kind === "error");
+  const checkedSources = Array.from(
+    new Set(
+      steps
+        .filter((step) => step.kind === "tool")
+        .map((step) =>
+          step.tool ? agentToolSources[step.tool] ?? step.tool : step.label,
+        ),
+    ),
+  );
+
+  if (isRunning) {
+    const current = steps.length > 0 ? steps[steps.length - 1] : null;
+
+    return (
+      <div className="flex items-center gap-3 rounded-md border border-[#d7ddd4] bg-white px-4 py-3.5">
         <span
-          className={`rounded-md px-2 py-1 text-xs font-semibold ${
-            isAgentRunning
-              ? "bg-[#fff0c2] text-[#6d4c16]"
-              : "bg-[#e6eee9] text-[#0f6f4d]"
-          }`}
-        >
-          {isAgentRunning ? "Working" : "Finished"}
-        </span>
+          aria-hidden
+          className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-[#cfe4da] border-t-[#0f6f4d]"
+        />
+        <p className="text-sm font-medium text-[#17211b]">
+          {current?.label ?? "Pondering the numbers..."}
+        </p>
       </div>
-      <ol className="mt-4 space-y-3">
-        {steps.map((step) => (
-          <li className="flex items-start gap-3 text-sm" key={step.id}>
-            <span
-              className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
-                step.kind === "error"
-                  ? "bg-[#f7dfdc] text-[#7a2f25]"
-                  : step.done
-                    ? "bg-[#e6eee9] text-[#0f6f4d]"
-                    : "animate-pulse bg-[#fff0c2] text-[#6d4c16]"
-              }`}
-            >
-              {step.kind === "error" ? "✕" : step.done ? "✓" : "•"}
-            </span>
-            <div className="min-w-0">
-              <p
-                className={`font-medium ${
-                  step.kind === "error" ? "text-[#7a2f25]" : "text-[#17211b]"
-                }`}
-              >
-                {step.label}
-              </p>
-              {step.detail ? (
-                <p className="truncate text-xs text-[#8b978e]">{step.detail}</p>
-              ) : null}
-            </div>
-          </li>
-        ))}
-      </ol>
-    </div>
+    );
+  }
+
+  if (errors.length > 0) {
+    return (
+      <div className="rounded-md border border-[#d8bbb6] bg-[#fbefed] px-4 py-3 text-sm text-[#7a2f25]">
+        {errors[errors.length - 1].label}
+      </div>
+    );
+  }
+
+  if (checkedSources.length === 0) {
+    return null;
+  }
+
+  return (
+    <p className="px-1 text-xs text-[#8b978e]">
+      Checked: {checkedSources.join(" · ")}
+    </p>
   );
 }
 

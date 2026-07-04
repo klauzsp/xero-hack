@@ -315,7 +315,7 @@ export async function runXeroAgent(
     return;
   }
 
-  emit({ type: "status", message: "Starting the Xero MCP server..." });
+  emit({ type: "status", message: "Cracking open the books..." });
 
   const session = await openXeroMcpSession(tokenResult.accessToken);
 
@@ -398,7 +398,10 @@ export async function runXeroAgent(
         continue;
       }
 
-      emit({ type: "status", message: "Writing up the answer..." });
+      emit({
+        type: "status",
+        message: "Adding it all up (carrying the one)...",
+      });
       emit({
         type: "answer",
         result: parseAgentResult(extractOutputText(interaction)),
