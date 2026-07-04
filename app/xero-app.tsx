@@ -40,6 +40,27 @@ type DashboardMetrics = {
   overdueInvoices: number;
 };
 
+type InvoiceReview = {
+  rank: number;
+  invoiceNumber: string;
+  contactName: string;
+  amountDue: number;
+  currencyCode: string;
+  daysPastDue: number;
+  priority: "high" | "medium" | "low";
+  reason: string;
+  recommendedAction: string;
+  emailSubject: string;
+  emailBody: string;
+};
+
+type InvoiceReviewResponse = {
+  generatedAt: string;
+  tenantName?: string;
+  summary: string;
+  reviews: InvoiceReview[];
+};
+
 const invoiceScopes = ["accounting.invoices.read", "accounting.invoices"];
 
 const initialStatus: Status = {
@@ -59,6 +80,8 @@ export function XeroApp({ view }: { view: AppView }) {
   const [isLoadingStatus, setIsLoadingStatus] = useState(true);
   const [isLoadingInvoices, setIsLoadingInvoices] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
+  const [isReviewing, setIsReviewing] = useState(false);
+  const [review, setReview] = useState<InvoiceReviewResponse | null>(null);
 
   const currency = invoices.find((invoice) => invoice.currencyCode)?.currencyCode ?? "GBP";
   const money = useMemo(
@@ -193,6 +216,34 @@ export function XeroApp({ view }: { view: AppView }) {
     }
   }
 
+  async function runInvoiceReview() {
+    setIsReviewing(true);
+    setMessage("Running invoice review agent...");
+
+    try {
+      const response = await fetch("/api/ai/invoice-review", {
+        method: "POST",
+      });
+      const data = (await response.json()) as InvoiceReviewResponse & {
+        error?: string;
+        detail?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(data.detail ?? data.error ?? "Invoice review failed");
+      }
+
+      setReview(data);
+      setMessage(`Agent ranked ${data.reviews.length} invoice follow-up(s).`);
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Invoice review failed",
+      );
+    } finally {
+      setIsReviewing(false);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-[#f7f8f6] text-[#17211b]">
       <header className="sticky top-0 z-10 border-b border-[#d7ddd4] bg-white/95 backdrop-blur">
@@ -263,7 +314,14 @@ export function XeroApp({ view }: { view: AppView }) {
             status={status}
           />
         ) : (
-          <ReviewView invoices={invoices} isLoadingInvoices={isLoadingInvoices} />
+          <ReviewView
+            invoices={invoices}
+            isLoadingInvoices={isLoadingInvoices}
+            isReviewing={isReviewing}
+            review={review}
+            runInvoiceReview={runInvoiceReview}
+            status={status}
+          />
         )}
       </main>
     </div>
@@ -472,38 +530,115 @@ function InvoiceTable({
 function ReviewView({
   invoices,
   isLoadingInvoices,
+  isReviewing,
+  review,
+  runInvoiceReview,
+  status,
 }: {
   invoices: Invoice[];
   isLoadingInvoices: boolean;
+  isReviewing: boolean;
+  review: InvoiceReviewResponse | null;
+  runInvoiceReview: () => void;
+  status: Status;
 }) {
-  const suggestedChecks = [
-    "Overdue invoice follow-up",
-    "Unusual invoice values",
-    "Customer payment concentration",
-    "Draft invoice cleanup",
-  ];
-
   return (
     <section className="grid gap-4 lg:grid-cols-[1fr_340px]">
       <div className="rounded-md border border-[#d7ddd4] bg-white">
-        <div className="border-b border-[#d7ddd4] px-4 py-3">
-          <h2 className="text-lg font-semibold">Suggestion queue</h2>
+        <div className="flex flex-col gap-3 border-b border-[#d7ddd4] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold">Agent suggestions</h2>
+            <p className="mt-1 text-sm text-[#526157]">
+              Ranked late-payment follow-ups with draft email copy.
+            </p>
+          </div>
+          <button
+            className="inline-flex h-10 items-center justify-center rounded-md bg-[#0f6f4d] px-3 text-sm font-semibold text-white transition hover:bg-[#0b5d40] disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!status.isConnected || isReviewing}
+            onClick={runInvoiceReview}
+            type="button"
+          >
+            {isReviewing ? "Reviewing..." : "Run agent"}
+          </button>
         </div>
-        <div className="divide-y divide-[#edf0eb]">
-          {suggestedChecks.map((check) => (
-            <div className="flex items-center justify-between gap-4 px-4 py-4" key={check}>
-              <div>
-                <p className="font-medium">{check}</p>
-                <p className="mt-1 text-sm text-[#526157]">
-                  Waiting for agent analysis.
-                </p>
-              </div>
-              <span className="rounded-md bg-[#eef2ec] px-2 py-1 text-xs font-semibold text-[#526157]">
-                Planned
-              </span>
+
+        {!review ? (
+          <div className="px-4 py-10 text-center text-sm text-[#526157]">
+            Run the agent to identify late invoices, rank follow-up priority,
+            and draft emails for review.
+          </div>
+        ) : review.reviews.length === 0 ? (
+          <div className="px-4 py-10 text-center text-sm text-[#526157]">
+            {review.summary}
+          </div>
+        ) : (
+          <div className="divide-y divide-[#edf0eb]">
+            <div className="px-4 py-3 text-sm text-[#526157]">
+              {review.summary}
             </div>
-          ))}
-        </div>
+            {review.reviews.map((item) => (
+              <article className="px-4 py-5" key={`${item.rank}-${item.invoiceNumber}`}>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-semibold text-[#526157]">
+                        #{item.rank}
+                      </span>
+                      <h3 className="text-lg font-semibold">
+                        {item.invoiceNumber} · {item.contactName}
+                      </h3>
+                    </div>
+                    <p className="mt-2 text-sm leading-6 text-[#526157]">
+                      {item.reason}
+                    </p>
+                  </div>
+                  <span
+                    className={`rounded-md px-2 py-1 text-xs font-semibold capitalize ${
+                      item.priority === "high"
+                        ? "bg-[#f7dfdc] text-[#7a2f25]"
+                        : item.priority === "medium"
+                          ? "bg-[#fff0c2] text-[#6d4c16]"
+                          : "bg-[#e6eee9] text-[#0f6f4d]"
+                    }`}
+                  >
+                    {item.priority}
+                  </span>
+                </div>
+
+                <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
+                  <div>
+                    <dt className="text-[#526157]">Amount due</dt>
+                    <dd className="font-semibold">
+                      {new Intl.NumberFormat("en-GB", {
+                        style: "currency",
+                        currency: item.currencyCode || "GBP",
+                      }).format(item.amountDue)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-[#526157]">Days past due</dt>
+                    <dd className="font-semibold">{item.daysPastDue}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[#526157]">Action</dt>
+                    <dd className="font-semibold">{item.recommendedAction}</dd>
+                  </div>
+                </dl>
+
+                <div className="mt-4 rounded-md border border-[#d7ddd4] bg-[#fbfcfa] p-4">
+                  <p className="text-sm font-semibold">Draft email</p>
+                  <p className="mt-3 text-sm">
+                    <span className="font-medium">Subject:</span>{" "}
+                    {item.emailSubject}
+                  </p>
+                  <pre className="mt-3 whitespace-pre-wrap font-sans text-sm leading-6 text-[#526157]">
+                    {item.emailBody}
+                  </pre>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
       </div>
 
       <aside className="rounded-md border border-[#d7ddd4] bg-white p-4">
@@ -515,11 +650,17 @@ function ReviewView({
           </div>
           <div className="flex justify-between gap-4">
             <dt className="text-[#526157]">Agent status</dt>
-            <dd className="font-medium">Not configured</dd>
+            <dd className="font-medium">
+              {isReviewing ? "Running" : review ? "Ready" : "Idle"}
+            </dd>
           </div>
           <div className="flex justify-between gap-4">
             <dt className="text-[#526157]">Data refresh</dt>
             <dd className="font-medium">{isLoadingInvoices ? "Loading" : "Ready"}</dd>
+          </div>
+          <div className="flex justify-between gap-4">
+            <dt className="text-[#526157]">Suggestions</dt>
+            <dd className="font-medium">{review?.reviews.length ?? 0}</dd>
           </div>
         </dl>
       </aside>
