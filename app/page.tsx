@@ -1,5 +1,5 @@
-import { XeroDashboard } from "./xero-dashboard";
+import { XeroApp } from "./xero-app";
 
 export default function Home() {
-  return <XeroDashboard />;
+  return <XeroApp view="dashboard" />;
 }
