@@ -738,16 +738,7 @@ function ReviewView({
                   </div>
                 </dl>
 
-                <div className="mt-4 rounded-md border border-[#d7ddd4] bg-[#fbfcfa] p-4">
-                  <p className="text-sm font-semibold">Draft email</p>
-                  <p className="mt-3 text-sm">
-                    <span className="font-medium">Subject:</span>{" "}
-                    {item.emailSubject}
-                  </p>
-                  <pre className="mt-3 whitespace-pre-wrap font-sans text-sm leading-6 text-[#526157]">
-                    {item.emailBody}
-                  </pre>
-                </div>
+                <EditableEmailDraft item={item} />
               </article>
               ))}
             </div>
@@ -755,6 +746,66 @@ function ReviewView({
         )}
       </div>
     </section>
+  );
+}
+
+function EditableEmailDraft({ item }: { item: InvoiceReview }) {
+  const [subject, setSubject] = useState(item.emailSubject);
+  const [body, setBody] = useState(item.emailBody);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
+    "idle",
+  );
+
+  async function copyDraft() {
+    const draft = `Subject: ${subject}\n\n${body}`;
+
+    try {
+      await navigator.clipboard.writeText(draft);
+      setCopyState("copied");
+      window.setTimeout(() => setCopyState("idle"), 1600);
+    } catch {
+      setCopyState("failed");
+      window.setTimeout(() => setCopyState("idle"), 2200);
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded-md border border-[#d7ddd4] bg-[#fbfcfa] p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm font-semibold">Draft email</p>
+        <button
+          className="inline-flex h-9 items-center justify-center rounded-md border border-[#b9c3b7] bg-white px-3 text-sm font-semibold text-[#17211b] transition hover:bg-[#eef2ec]"
+          onClick={copyDraft}
+          type="button"
+        >
+          {copyState === "copied"
+            ? "Copied"
+            : copyState === "failed"
+              ? "Copy failed"
+              : "Copy email"}
+        </button>
+      </div>
+
+      <label className="mt-4 block text-sm font-medium" htmlFor={`subject-${item.rank}`}>
+        Subject
+      </label>
+      <input
+        className="mt-2 h-10 w-full rounded-md border border-[#b9c3b7] bg-white px-3 text-sm outline-none transition focus:border-[#0f6f4d] focus:ring-2 focus:ring-[#cfe4da]"
+        id={`subject-${item.rank}`}
+        onChange={(event) => setSubject(event.target.value)}
+        value={subject}
+      />
+
+      <label className="mt-4 block text-sm font-medium" htmlFor={`body-${item.rank}`}>
+        Body
+      </label>
+      <textarea
+        className="mt-2 min-h-56 w-full resize-y rounded-md border border-[#b9c3b7] bg-white px-3 py-3 text-sm leading-6 outline-none transition focus:border-[#0f6f4d] focus:ring-2 focus:ring-[#cfe4da]"
+        id={`body-${item.rank}`}
+        onChange={(event) => setBody(event.target.value)}
+        value={body}
+      />
+    </div>
   );
 }
 
