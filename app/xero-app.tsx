@@ -213,7 +213,6 @@ export function XeroApp({
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [isAgentRunning, setIsAgentRunning] = useState(false);
   const [agentTurns, setAgentTurns] = useState<AgentTurn[]>([]);
-  const [lockedTools, setLockedTools] = useState<string[]>([]);
   const [invoiceError, setInvoiceError] = useState<string | null>(null);
   const [invoiceWarning, setInvoiceWarning] = useState<string | null>(null);
   const [hasLoadedInvoices, setHasLoadedInvoices] = useState(false);
@@ -513,7 +512,6 @@ export function XeroApp({
         });
         break;
       case "abilities":
-        setLockedTools(event.locked);
         break;
       case "tool_call":
         appendTraceStep({
@@ -729,9 +727,7 @@ export function XeroApp({
           <ReviewView
             agentTurns={agentTurns}
             initialQuestion={initialQuestion}
-            invoices={invoices}
             isAgentRunning={isAgentRunning}
-            lockedTools={lockedTools}
             resetConversation={resetConversation}
             runAgent={runAgent}
             status={status}
@@ -1280,18 +1276,14 @@ function InvoiceTable({
 function ReviewView({
   agentTurns,
   initialQuestion,
-  invoices,
   isAgentRunning,
-  lockedTools,
   resetConversation,
   runAgent,
   status,
 }: {
   agentTurns: AgentTurn[];
   initialQuestion: string;
-  invoices: Invoice[];
   isAgentRunning: boolean;
-  lockedTools: string[];
   resetConversation: () => void;
   runAgent: (question?: string) => Promise<void>;
   status: Status;
@@ -1303,11 +1295,6 @@ function ReviewView({
     "Bruno, how is the roastery performing?",
     "Bruno, which café customers are the biggest credit risk?",
   ];
-  const lastTurn =
-    agentTurns.length > 0 ? agentTurns[agentTurns.length - 1] : null;
-  const findingCount =
-    (lastTurn?.result?.insights?.length ?? 0) +
-    (lastTurn?.result?.reviews?.length ?? 0);
 
   async function submitQuestion(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1387,23 +1374,6 @@ function ReviewView({
           </div>
         ) : null}
 
-        {lockedTools.length > 0 ? (
-          <p className="mt-3 rounded-2xl border border-[#ead0a2] bg-[#fff8e8] px-3 py-2 text-xs text-[#6d4c16]">
-            {lockedTools.length} Bruno abilities are not covered by your current
-            Xero token. Disconnecting and reconnecting unlocks any that your
-            Xero app configuration allows.
-          </p>
-        ) : null}
-
-        <div className="mt-5 grid gap-3 border-t border-[#f0e7d6] pt-4 text-sm sm:grid-cols-4">
-          <ReviewContextItem label="Invoices" value={String(invoices.length)} />
-          <ReviewContextItem
-            label="Bruno"
-            value={isAgentRunning ? "Working" : lastTurn ? "Ready" : "Idle"}
-          />
-          <ReviewContextItem label="Turns" value={String(agentTurns.length)} />
-          <ReviewContextItem label="Findings" value={String(findingCount)} />
-        </div>
       </div>
 
       {agentTurns.length === 0 ? (
@@ -1417,7 +1387,12 @@ function ReviewView({
       {agentTurns.map((turn, turnIndex) => {
         const isLastTurn = turnIndex === agentTurns.length - 1;
         const turnInsights = turn.result?.insights ?? [];
-        const turnReviews = turn.result?.reviews ?? [];
+        // Contacts with an email on file lead; Bruno's ranking holds within
+        // each group (stable sort), so a missing address never opens the list.
+        const turnReviews = [...(turn.result?.reviews ?? [])].sort(
+          (a, b) =>
+            (b.contactEmail?.trim() ? 1 : 0) - (a.contactEmail?.trim() ? 1 : 0),
+        );
         const followUps = turn.result?.followUps ?? [];
 
         return (
@@ -1456,7 +1431,7 @@ function ReviewView({
                   </div>
                 ) : null}
                 <div className="divide-y divide-[#f0e7d6]">
-                  {turnReviews.map((item) => (
+                  {turnReviews.map((item, itemIndex) => (
                     <article
                       className="px-5 py-5"
                       key={`${item.rank}-${item.invoiceNumber}`}
@@ -1465,7 +1440,7 @@ function ReviewView({
                         <div>
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="text-sm font-semibold text-[#6f5f4b]">
-                              #{item.rank}
+                              #{itemIndex + 1}
                             </span>
                             <h3 className="text-lg font-semibold">
                               {item.invoiceNumber} · {item.contactName}
@@ -1777,11 +1752,3 @@ function EditableEmailDraft({ item }: { item: InvoiceReview }) {
   );
 }
 
-function ReviewContextItem({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <p className="text-[#6f5f4b]">{label}</p>
-      <p className="mt-1 font-semibold">{value}</p>
-    </div>
-  );
-}
