@@ -110,27 +110,43 @@ type AgentTraceStep = {
   label: string;
 };
 
-// Playful spinner copy while a tool runs; the plain-English source names
-// below feed the sober "Checked: ..." summary once the turn finishes.
+const persona = {
+  owner: "Alice",
+  business: "Alice & Co. Coffee Roasters",
+  agent: "Luigi",
+  shortBusiness: "Alice’s roastery",
+  description:
+    "Alice runs a wholesale coffee roastery supplying cafés, offices, and local retailers.",
+  goal: "Luigi helps Alice keep cash moving without damaging customer relationships.",
+};
+
 const agentToolLabels: Record<string, string> = {
-  "list-invoices": "Shaking the invoice tree...",
-  "list-contacts": "Flipping through the address book...",
-  "list-contact-groups": "Sorting contacts into cliques...",
-  "list-accounts": "Dusting off the chart of accounts...",
-  "list-items": "Counting things in the stockroom...",
-  "list-tax-rates": "Consulting the sacred tax tables...",
-  "list-organisation-details": "Polishing the company nameplate...",
-  "list-tracking-categories": "Untangling the tracking categories...",
-  "list-payments": "Following the money...",
-  "list-bank-transactions": "Snooping through the bank statement...",
-  "list-credit-notes": "Counting the IOUs...",
-  "list-quotes": "Digging up old quotes...",
-  "list-manual-journals": "Deciphering the manual journals...",
-  "list-profit-and-loss": "Peeking at the P&L (fingers crossed)...",
-  "list-report-balance-sheet": "Making sure the balance sheet balances...",
-  "list-trial-balance": "Giving the trial balance a stern look...",
-  "list-aged-receivables-by-contact": "Working out who owes you money...",
-  "list-aged-payables-by-contact": "Working out who you owe money to...",
+  "list-invoices": "Luigi is checking the unpaid café tabs...",
+  "list-contacts": "Luigi is looking through Alice’s customer book...",
+  "list-contact-groups": "Luigi is sorting wholesale customers...",
+  "list-accounts": "Luigi is checking the ledgers behind the counter...",
+  "list-items": "Luigi is counting beans, blends, and line items...",
+  "list-tax-rates": "Luigi is checking the tax notes...",
+  "list-organisation-details": "Luigi is reading the roastery details...",
+  "list-tracking-categories": "Luigi is sorting the labels on the shelves...",
+  "list-payments": "Luigi is following the money trail...",
+  "list-bank-transactions": "Luigi is checking the bank statement...",
+  "list-credit-notes": "Luigi is checking credits and adjustments...",
+  "list-quotes": "Luigi is checking old quotes...",
+  "list-manual-journals": "Luigi is reading the manual journals...",
+  "list-profit-and-loss": "Luigi is brewing the profit & loss...",
+  "list-report-balance-sheet": "Luigi is weighing the balance sheet...",
+  "list-trial-balance": "Luigi is giving the trial balance a stern look...",
+  "list-aged-receivables-by-contact":
+    "Luigi is checking which customers are overdue...",
+  "list-aged-payables-by-contact":
+    "Luigi is checking what Alice still needs to pay...",
+};
+
+const agentStatusLabels: Record<string, string> = {
+  "Cracking open the books...": "Luigi is opening the roastery books...",
+  "Adding it all up (carrying the one)...":
+    "Luigi is adding it all up, one espresso at a time...",
 };
 
 const agentToolSources: Record<string, string> = {
@@ -153,7 +169,6 @@ const agentToolSources: Record<string, string> = {
   "list-aged-receivables-by-contact": "aged receivables",
   "list-aged-payables-by-contact": "aged payables",
 };
-
 
 const invoiceScopes = ["accounting.invoices.read", "accounting.invoices"];
 
@@ -204,7 +219,9 @@ export function XeroApp({
   const turnIdRef = useRef(0);
   const interactionIdRef = useRef<string | null>(null);
 
-  const currency = invoices.find((invoice) => invoice.currencyCode)?.currencyCode ?? "GBP";
+  const currency =
+    invoices.find((invoice) => invoice.currencyCode)?.currencyCode ?? "GBP";
+
   const money = useMemo(
     () =>
       new Intl.NumberFormat("en-GB", {
@@ -269,14 +286,16 @@ export function XeroApp({
       setMessage(
         callbackError ??
           (nextStatus.isConnected
-            ? "Connected to Xero. Invoice data is ready to review."
-            : "Ready to connect to your Xero demo company."),
+            ? `Connected to Xero. ${persona.agent} can review Alice’s coffee accounts.`
+            : "Ready to connect Alice’s Xero demo company."),
       );
       setIsLoadingStatus(false);
     }
 
     loadStatus().catch((error) => {
-      setMessage(error instanceof Error ? error.message : "Status check failed");
+      setMessage(
+        error instanceof Error ? error.message : "Status check failed",
+      );
       setIsLoadingStatus(false);
     });
   }, []);
@@ -317,7 +336,7 @@ export function XeroApp({
   async function loadInvoices(fresh = false) {
     setIsLoadingInvoices(true);
     setInvoiceError(null);
-    setMessage("Requesting invoices from Xero...");
+    setMessage(`${persona.agent} is requesting invoice data from Xero...`);
 
     try {
       const response = await fetch(
@@ -334,7 +353,9 @@ export function XeroApp({
 
       setInvoices(data.invoices);
       setHasLoadedInvoices(true);
-      setMessage(`Xero returned ${data.count} invoice record(s).`);
+      setMessage(
+        `${persona.agent} found ${data.count} invoice record(s) in Xero.`,
+      );
     } catch (error) {
       const nextError =
         error instanceof Error ? error.message : "Invoice request failed";
@@ -357,7 +378,10 @@ export function XeroApp({
       });
 
       if (!response.ok) {
-        const data = (await response.json()) as { detail?: string; error?: string };
+        const data = (await response.json()) as {
+          detail?: string;
+          error?: string;
+        };
         throw new Error(data.detail ?? data.error ?? "Disconnect failed");
       }
 
@@ -402,7 +426,10 @@ export function XeroApp({
   function handleAgentEvent(event: AgentStreamEvent) {
     switch (event.type) {
       case "status":
-        appendTraceStep({ kind: "status", label: event.message });
+        appendTraceStep({
+          kind: "status",
+          label: agentStatusLabels[event.message] ?? event.message,
+        });
         break;
       case "abilities":
         setLockedTools(event.locked);
@@ -426,7 +453,7 @@ export function XeroApp({
 
         updateLastTurn((turn) => ({ ...turn, result: event.result }));
         setMessage(
-          `Agent finished with ${insightCount} insight(s) and ${reviewCount} follow-up(s).`,
+          `${persona.agent} finished with ${insightCount} insight(s) and ${reviewCount} follow-up(s).`,
         );
         break;
       }
@@ -440,7 +467,7 @@ export function XeroApp({
   function resetConversation() {
     interactionIdRef.current = null;
     setAgentTurns([]);
-    setMessage("Started a new conversation with the agent.");
+    setMessage(`Started a new conversation with ${persona.agent}.`);
   }
 
   async function runAgent(question = "Check invoices") {
@@ -450,7 +477,7 @@ export function XeroApp({
       { id: turnIdRef.current, question, steps: [], result: null },
     ]);
     setIsAgentRunning(true);
-    setMessage("Agent is planning which Xero data to pull...");
+    setMessage(`${persona.agent} is planning which Xero data to pull...`);
 
     try {
       const response = await fetch("/api/ai/agent", {
@@ -512,30 +539,40 @@ export function XeroApp({
   }
 
   return (
-    <div className="min-h-screen bg-[#f7f8f6] text-[#17211b]">
-      <header className="sticky top-0 z-10 border-b border-[#d7ddd4] bg-white/95 backdrop-blur">
+    <div className="min-h-screen bg-[#f7efe5] text-[#2f2417]">
+      <header className="sticky top-0 z-10 border-b border-[#e4d2b8] bg-[#fffaf4]/95 backdrop-blur">
         <nav className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-5 sm:px-8">
           <div className="flex items-center gap-8">
-            <Link className="text-base font-semibold" href="/">
-              Xero Review
+            <Link className="flex items-center gap-3" href="/">
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#6f2f1f] shadow-sm">
+                <div className="relative h-6 w-5 rotate-[-18deg] rounded-full bg-[#fff7ec]">
+                  <span className="absolute left-1/2 top-[3px] h-[18px] w-[2px] -translate-x-1/2 rounded-full bg-[#6f2f1f]" />
+                  <span className="absolute left-[7px] top-[5px] h-3 w-[2px] rotate-[28deg] rounded-full bg-[#6f2f1f]" />
+                  <span className="absolute left-[10px] top-[8px] h-3 w-[2px] rotate-[28deg] rounded-full bg-[#6f2f1f]" />
+                </div>
+              </div>
+
+              <div className="leading-tight">
+                <p className="font-[family-name:var(--font-fraunces)] text-lg font-semibold tracking-[-0.02em] text-[#2f2417]">
+                  Alice’s Brew Books
+                </p>
+              </div>
             </Link>
+
             <div className="flex items-center gap-1">
               <NavLink active={view === "dashboard"} href="/">
                 Dashboard
               </NavLink>
               <NavLink active={view === "review"} href="/review">
-                Review
+                Ask Bruno
               </NavLink>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
-            <span className="hidden max-w-44 truncate text-sm text-[#526157] sm:inline">
-              {status.tenantName ?? "No company"}
-            </span>
             {status.isConnected ? (
               <button
-                className="inline-flex h-10 items-center justify-center rounded-md border border-[#d8bbb6] bg-white px-3 text-sm font-semibold text-[#7a2f25] transition hover:bg-[#fbefed] disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex h-10 items-center justify-center rounded-full border border-[#d8b8ad] bg-[#fffaf4] px-4 text-sm font-semibold text-[#7a2f25] transition hover:bg-[#fbefed] disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={isDisconnecting || isLoadingStatus}
                 onClick={disconnectXero}
                 type="button"
@@ -544,7 +581,7 @@ export function XeroApp({
               </button>
             ) : (
               <a
-                className="inline-flex h-10 items-center justify-center rounded-md bg-[#0f6f4d] px-3 text-sm font-semibold text-white transition hover:bg-[#0b5d40]"
+                className="inline-flex h-10 items-center justify-center rounded-full bg-[#6f2f1f] px-4 text-sm font-semibold text-white transition hover:bg-[#572417]"
                 href="/api/xero/connect"
               >
                 Connect Xero
@@ -555,21 +592,46 @@ export function XeroApp({
       </header>
 
       <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-5 py-8 sm:px-8">
-        <section className="flex flex-col gap-2">
-          <p className="text-sm font-semibold uppercase tracking-[0.14em] text-[#31795a]">
-            {status.isConnected ? status.tenantName : "Xero developer demo"}
-          </p>
-          <h1 className="text-3xl font-semibold leading-tight sm:text-4xl">
-            {view === "dashboard" ? "Financial dashboard" : "Agent review"}
-          </h1>
-          <p className="max-w-2xl text-base leading-7 text-[#526157]">
-            {view === "dashboard"
-              ? "Track invoice totals, receivables, and overdue work from your connected Xero company."
-              : "An autonomous agent with live Xero tools — it decides which data to pull, shows its working, and reports back."}
-          </p>
-        </section>
+        <section className="overflow-hidden rounded-3xl border border-[#e4d2b8] bg-[#fffaf4] px-5 py-4 shadow-sm sm:px-6 sm:py-5">
+          <div className="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-center">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#9a6b3f]">
+                {status.isConnected ? status.tenantName : persona.business}
+              </p>
 
-        <StatusBanner status={status} message={message} />
+              <h1 className="mt-2 text-2xl font-semibold leading-tight sm:text-3xl">
+                {view === "dashboard"
+                  ? "Alice’s roastery books."
+                  : "Ask Bruno what Alice should do next."}
+              </h1>
+
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-[#6f5f4b]">
+                {view === "dashboard"
+                  ? "Bruno turns Alice’s Xero data into a simple cash-flow view."
+                  : "Bruno checks Xero MCP tools, finds late café payments, and drafts customer-friendly follow-ups."}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-4 lg:justify-end">
+              <div className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[#eadbc3] bg-[#f7efe5] shadow-sm sm:h-28 sm:w-28">
+                <img
+                  alt="Bruno, Alice’s AI cash-flow assistant"
+                  className="h-full w-full object-cover"
+                  src="/bruno.png"
+                />
+              </div>
+
+              <div className="text-left">
+                <p className="font-[family-name:var(--font-fraunces)] text-lg font-semibold tracking-[-0.02em] text-[#2f2417]">
+                  Welcome back, Alice.
+                </p>
+                <p className="mt-0.5 text-xs leading-5 text-[#6f5f4b]">
+                  Bruno has the books ready.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
 
         {view === "dashboard" ? (
           <DashboardView
@@ -611,10 +673,10 @@ function NavLink({
 }) {
   return (
     <Link
-      className={`rounded-md px-3 py-2 text-sm font-medium transition ${
+      className={`rounded-full px-4 py-2 text-sm font-medium transition ${
         active
-          ? "bg-[#e6eee9] text-[#0f6f4d]"
-          : "text-[#526157] hover:bg-[#eef2ec] hover:text-[#17211b]"
+          ? "bg-[#eadbc3] text-[#6f2f1f]"
+          : "text-[#6f5f4b] hover:bg-[#f3ead9] hover:text-[#2f2417]"
       }`}
       href={href}
     >
@@ -623,14 +685,20 @@ function NavLink({
   );
 }
 
-function StatusBanner({ message, status }: { message: string; status: Status }) {
+function StatusBanner({
+  message,
+  status,
+}: {
+  message: string;
+  status: Status;
+}) {
   const lacksInvoiceScope =
     status.isConnected &&
     !invoiceScopes.some((scope) => status.scopes.includes(scope));
 
   if (!status.isConfigured) {
     return (
-      <section className="rounded-md border border-[#ead0a2] bg-[#fff8e8] p-4 text-sm text-[#6d4c16]">
+      <section className="rounded-2xl border border-[#ead0a2] bg-[#fff8e8] p-4 text-sm text-[#6d4c16]">
         Missing env vars: {status.missingConfig.join(", ")}
       </section>
     );
@@ -638,7 +706,7 @@ function StatusBanner({ message, status }: { message: string; status: Status }) 
 
   if (lacksInvoiceScope) {
     return (
-      <section className="rounded-md border border-[#ead0a2] bg-[#fff8e8] p-4 text-sm text-[#6d4c16]">
+      <section className="rounded-2xl border border-[#ead0a2] bg-[#fff8e8] p-4 text-sm text-[#6d4c16]">
         This app is configured without invoice scope. Add
         `accounting.invoices.read` to `XERO_SCOPES`, restart the dev server, and
         reconnect to Xero.
@@ -647,7 +715,7 @@ function StatusBanner({ message, status }: { message: string; status: Status }) 
   }
 
   return (
-    <section className="rounded-md border border-[#d7ddd4] bg-white px-4 py-3 text-sm text-[#526157]">
+    <section className="rounded-2xl border border-[#e4d2b8] bg-[#fffaf4] px-4 py-3 text-sm text-[#6f5f4b]">
       {message}
     </section>
   );
@@ -679,7 +747,7 @@ function DashboardView({
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard
           label="Bank balance"
-          question="Is our bank balance healthy given our upcoming bills?"
+          question="Luigi, is Alice’s bank balance healthy given upcoming bills?"
           value={
             reports?.bank
               ? money.format(reports.bank.total)
@@ -689,18 +757,18 @@ function DashboardView({
           }
         />
         <MetricCard
-          label="Owed to you"
-          question="Who owes us money and who should we chase first?"
+          label="Recievables"
+          question="Luigi, who owes Alice money and who should she chase first?"
           value={money.format(metrics.receivablesDue)}
         />
         <MetricCard
-          label="You owe"
-          question="Which bills do we owe and which should we pay first?"
+          label="Payables"
+          question="Luigi, which bills should Alice be aware of?"
           value={money.format(metrics.payablesDue)}
         />
         <MetricCard
           label="Overdue invoices"
-          question="Draft chase emails for our overdue invoices"
+          question="Luigi, draft payment nudges for overdue café invoices"
           value={String(metrics.overdueInvoices)}
         />
       </section>
@@ -726,20 +794,21 @@ function DashboardView({
           isLoadingInvoices={isLoadingInvoices}
           money={money}
         />
-        <aside className="rounded-md border border-[#d7ddd4] bg-white p-4">
+        <aside className="rounded-2xl border border-[#e4d2b8] bg-[#fffaf4] p-4">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h2 className="text-lg font-semibold">Connection</h2>
-              <p className="mt-1 text-sm leading-6 text-[#526157]">
+              <h2 className="text-lg font-semibold">Xero connection</h2>
+              {/* this section to remove or change */}
+              <p className="mt-1 text-sm leading-6 text-[#6f5f4b]">
                 {status.isConnected
-                  ? "Invoice data is available for the connected company."
-                  : "Connect Xero to load dashboard metrics."}
+                  ? "Luigi can read Alice’s Xero data through the connected company."
+                  : "Connect Xero to load Alice’s roastery metrics."}
               </p>
             </div>
             <span
-              className={`rounded-md px-2 py-1 text-xs font-semibold ${
+              className={`rounded-full px-3 py-1 text-xs font-semibold ${
                 status.isConnected
-                  ? "bg-[#e6eee9] text-[#0f6f4d]"
+                  ? "bg-[#eadbc3] text-[#6f2f1f]"
                   : "bg-[#f1e9e7] text-[#7a2f25]"
               }`}
             >
@@ -748,25 +817,27 @@ function DashboardView({
           </div>
           <dl className="mt-5 space-y-3 text-sm">
             <div className="flex justify-between gap-4">
-              <dt className="text-[#526157]">Company</dt>
-              <dd className="truncate font-medium">{status.tenantName ?? "None"}</dd>
+              <dt className="text-[#6f5f4b]">Company</dt>
+              <dd className="truncate font-medium">
+                {status.tenantName ?? "None"}
+              </dd>
             </div>
             <div className="flex justify-between gap-4">
-              <dt className="text-[#526157]">Open invoices</dt>
+              <dt className="text-[#6f5f4b]">Open invoices</dt>
               <dd className="font-medium">{metrics.openInvoices}</dd>
             </div>
             <div className="flex justify-between gap-4">
-              <dt className="text-[#526157]">Invoices loaded</dt>
+              <dt className="text-[#6f5f4b]">Invoices loaded</dt>
               <dd className="font-medium">{invoices.length}</dd>
             </div>
           </dl>
           <button
-            className="mt-5 inline-flex h-10 w-full items-center justify-center rounded-md border border-[#b9c3b7] bg-white px-3 text-sm font-semibold text-[#17211b] transition hover:bg-[#eef2ec] disabled:cursor-not-allowed disabled:opacity-50"
+            className="mt-5 inline-flex h-10 w-full items-center justify-center rounded-full border border-[#cdbba1] bg-[#fffaf4] px-3 text-sm font-semibold text-[#2f2417] transition hover:bg-[#f3ead9] disabled:cursor-not-allowed disabled:opacity-50"
             disabled={!status.isConnected || isLoadingInvoices}
             onClick={() => loadInvoices(true)}
             type="button"
           >
-            {isLoadingInvoices ? "Refreshing..." : "Refresh invoices"}
+            {isLoadingInvoices ? "Refreshing..." : "Refresh Xero data"}
           </button>
         </aside>
       </section>
@@ -785,11 +856,11 @@ function MetricCard({
 }) {
   const body = (
     <>
-      <p className="flex items-center justify-between gap-2 text-sm text-[#526157]">
+      <p className="flex items-center justify-between gap-2 text-sm text-[#6f5f4b]">
         {label}
         {question ? (
-          <span aria-hidden className="text-xs text-[#8b978e]">
-            Ask the agent →
+          <span aria-hidden className="text-xs text-[#a3907a]">
+            Ask Luigi →
           </span>
         ) : null}
       </p>
@@ -799,13 +870,15 @@ function MetricCard({
 
   if (!question) {
     return (
-      <div className="rounded-md border border-[#d7ddd4] bg-white p-4">{body}</div>
+      <div className="rounded-2xl border border-[#e4d2b8] bg-[#fffaf4] p-4">
+        {body}
+      </div>
     );
   }
 
   return (
     <Link
-      className="rounded-md border border-[#d7ddd4] bg-white p-4 transition hover:border-[#0f6f4d] hover:shadow-sm"
+      className="rounded-2xl border border-[#e4d2b8] bg-[#fffaf4] p-4 transition hover:border-[#6f2f1f] hover:shadow-sm"
       href={`/review?q=${encodeURIComponent(question)}`}
     >
       {body}
@@ -814,8 +887,8 @@ function MetricCard({
 }
 
 const pnlSeriesColors = {
-  income: "#00875a",
-  expenses: "#2a78d6",
+  income: "#6f2f1f",
+  expenses: "#c7773a",
 };
 
 function PnlCard({
@@ -828,24 +901,30 @@ function PnlCard({
   pnl: { months: PnlMonth[] } | null;
 }) {
   const latest = pnl?.months[pnl.months.length - 1];
-  const previous = pnl && pnl.months.length > 1 ? pnl.months[pnl.months.length - 2] : null;
-  const delta = latest && previous ? latest.netProfit - previous.netProfit : null;
+  const previous =
+    pnl && pnl.months.length > 1 ? pnl.months[pnl.months.length - 2] : null;
+  const delta =
+    latest && previous ? latest.netProfit - previous.netProfit : null;
 
   return (
-    <div className="rounded-md border border-[#d7ddd4] bg-white p-4">
+    <div className="rounded-2xl border border-[#e4d2b8] bg-[#fffaf4] p-4">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-lg font-semibold">Profit &amp; loss</h2>
-          <p className="mt-1 text-sm text-[#526157]">Last 3 months</p>
+          <h2 className="text-lg font-semibold">Roastery profit &amp; loss</h2>
+          <p className="mt-1 text-sm text-[#6f5f4b]">Last 3 months</p>
         </div>
         {latest ? (
           <div className="text-right">
-            <p className="text-sm text-[#526157]">Net profit ({latest.label})</p>
-            <p className="text-xl font-semibold">{money.format(latest.netProfit)}</p>
+            <p className="text-sm text-[#6f5f4b]">
+              Net profit ({latest.label})
+            </p>
+            <p className="text-xl font-semibold">
+              {money.format(latest.netProfit)}
+            </p>
             {delta !== null ? (
               <p
                 className={`text-xs font-semibold ${
-                  delta >= 0 ? "text-[#0f6f4d]" : "text-[#7a2f25]"
+                  delta >= 0 ? "text-[#6f2f1f]" : "text-[#7a2f25]"
                 }`}
               >
                 {delta >= 0 ? "▲" : "▼"} {money.format(Math.abs(delta))} vs{" "}
@@ -859,7 +938,7 @@ function PnlCard({
       {pnl && pnl.months.length > 0 ? (
         <PnlChart money={money} months={pnl.months} />
       ) : (
-        <p className="mt-8 text-sm text-[#526157]">
+        <p className="mt-8 text-sm text-[#6f5f4b]">
           {isLoadingReports
             ? "Loading profit & loss..."
             : "Profit & loss is unavailable. Reconnect to Xero to grant report access."}
@@ -885,15 +964,15 @@ function PnlChart({
 
   return (
     <div className="mt-5">
-      <div className="flex items-end gap-6 border-b border-[#e1e0d9] px-2">
+      <div className="flex items-end gap-6 border-b border-[#dccbb1] px-2">
         {months.map((month) => (
           <div
             className="group relative flex flex-1 flex-col items-center"
             key={month.label}
           >
-            <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 hidden w-max -translate-x-1/2 rounded-md border border-[#d7ddd4] bg-white px-3 py-2 text-xs shadow-md group-hover:block">
-              <p className="font-semibold text-[#17211b]">{month.label}</p>
-              <p className="mt-1 flex items-center gap-1.5 text-[#526157]">
+            <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 hidden w-max -translate-x-1/2 rounded-2xl border border-[#e4d2b8] bg-[#fffaf4] px-3 py-2 text-xs shadow-md group-hover:block">
+              <p className="font-semibold text-[#2f2417]">{month.label}</p>
+              <p className="mt-1 flex items-center gap-1.5 text-[#6f5f4b]">
                 <span
                   aria-hidden
                   className="h-2 w-2 rounded-full"
@@ -901,7 +980,7 @@ function PnlChart({
                 />
                 Income {money.format(month.income)}
               </p>
-              <p className="mt-0.5 flex items-center gap-1.5 text-[#526157]">
+              <p className="mt-0.5 flex items-center gap-1.5 text-[#6f5f4b]">
                 <span
                   aria-hidden
                   className="h-2 w-2 rounded-full"
@@ -909,20 +988,20 @@ function PnlChart({
                 />
                 Expenses {money.format(month.expenses)}
               </p>
-              <p className="mt-0.5 text-[#526157]">
+              <p className="mt-0.5 text-[#6f5f4b]">
                 Net {money.format(month.netProfit)}
               </p>
             </div>
             <div className="flex h-[120px] w-full items-end justify-center gap-[2px]">
               <div
-                className="w-5 rounded-t-[4px]"
+                className="w-5 rounded-t-[6px]"
                 style={{
                   backgroundColor: pnlSeriesColors.income,
                   height: barHeight(month.income),
                 }}
               />
               <div
-                className="w-5 rounded-t-[4px]"
+                className="w-5 rounded-t-[6px]"
                 style={{
                   backgroundColor: pnlSeriesColors.expenses,
                   height: barHeight(month.expenses),
@@ -935,14 +1014,14 @@ function PnlChart({
       <div className="flex gap-6 px-2">
         {months.map((month) => (
           <p
-            className="flex-1 pt-2 text-center text-xs text-[#8b978e]"
+            className="flex-1 pt-2 text-center text-xs text-[#a3907a]"
             key={month.label}
           >
             {month.label}
           </p>
         ))}
       </div>
-      <div className="mt-3 flex items-center gap-4 text-xs text-[#526157]">
+      <div className="mt-3 flex items-center gap-4 text-xs text-[#6f5f4b]">
         <span className="flex items-center gap-1.5">
           <span
             aria-hidden
@@ -976,42 +1055,42 @@ function BankCard({
   netAssets: number | null;
 }) {
   return (
-    <div className="rounded-md border border-[#d7ddd4] bg-white p-4">
-      <h2 className="text-lg font-semibold">Bank accounts</h2>
-      <p className="mt-1 text-sm text-[#526157]">
+    <div className="rounded-2xl border border-[#e4d2b8] bg-[#fffaf4] p-4">
+      <h2 className="text-lg font-semibold">Roastery bank accounts</h2>
+      <p className="mt-1 text-sm text-[#6f5f4b]">
         Balances from today&apos;s balance sheet
       </p>
 
       {bank ? (
         <div className="mt-4">
-          <ul className="divide-y divide-[#edf0eb]">
+          <ul className="divide-y divide-[#f0e7d6]">
             {bank.accounts.map((account) => (
               <li
                 className="flex items-center justify-between gap-4 py-3 text-sm"
                 key={account.name}
               >
-                <span className="truncate text-[#17211b]">{account.name}</span>
+                <span className="truncate text-[#2f2417]">{account.name}</span>
                 <span className="font-semibold">
                   {money.format(account.balance)}
                 </span>
               </li>
             ))}
           </ul>
-          <div className="flex items-center justify-between gap-4 border-t border-[#d7ddd4] py-3 text-sm">
-            <span className="font-semibold text-[#17211b]">Total</span>
+          <div className="flex items-center justify-between gap-4 border-t border-[#e4d2b8] py-3 text-sm">
+            <span className="font-semibold text-[#2f2417]">Total</span>
             <span className="font-semibold">{money.format(bank.total)}</span>
           </div>
           {netAssets !== null ? (
-            <div className="flex items-center justify-between gap-4 rounded-md bg-[#eef2ec] px-3 py-2.5 text-sm">
-              <span className="text-[#526157]">Net assets</span>
-              <span className="font-semibold text-[#0f6f4d]">
+            <div className="flex items-center justify-between gap-4 rounded-2xl bg-[#f3ead9] px-3 py-2.5 text-sm">
+              <span className="text-[#6f5f4b]">Net assets</span>
+              <span className="font-semibold text-[#6f2f1f]">
                 {money.format(netAssets)}
               </span>
             </div>
           ) : null}
         </div>
       ) : (
-        <p className="mt-8 text-sm text-[#526157]">
+        <p className="mt-8 text-sm text-[#6f5f4b]">
           {isLoadingReports
             ? "Loading bank balances..."
             : "Bank balances are unavailable. Reconnect to Xero to grant report access."}
@@ -1037,21 +1116,21 @@ function InvoiceTable({
   const visibleInvoices = invoices.slice(0, invoiceTableRowLimit);
 
   return (
-    <section className="rounded-md border border-[#d7ddd4] bg-white">
-      <div className="flex items-baseline justify-between gap-4 border-b border-[#d7ddd4] px-4 py-3">
-        <h2 className="text-lg font-semibold">Recent invoices</h2>
+    <section className="overflow-hidden rounded-2xl border border-[#e4d2b8] bg-[#fffaf4]">
+      <div className="flex items-baseline justify-between gap-4 border-b border-[#e4d2b8] px-4 py-3">
+        <h2 className="text-lg font-semibold">Recent wholesale invoices</h2>
         {invoices.length > invoiceTableRowLimit ? (
-          <p className="text-xs text-[#8b978e]">
+          <p className="text-xs text-[#a3907a]">
             Showing {invoiceTableRowLimit} of {invoices.length}
           </p>
         ) : null}
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[720px] border-collapse text-left text-sm">
-          <thead className="bg-[#eef2ec] text-[#526157]">
+          <thead className="bg-[#f3ead9] text-[#6f5f4b]">
             <tr>
               <th className="px-4 py-3 font-semibold">Invoice</th>
-              <th className="px-4 py-3 font-semibold">Contact</th>
+              <th className="px-4 py-3 font-semibold">Customer</th>
               <th className="px-4 py-3 font-semibold">Status</th>
               <th className="px-4 py-3 font-semibold">Due date</th>
               <th className="px-4 py-3 text-right font-semibold">Total</th>
@@ -1061,32 +1140,43 @@ function InvoiceTable({
           <tbody>
             {invoiceError ? (
               <tr>
-                <td className="px-4 py-8 text-center text-[#7a2f25]" colSpan={6}>
+                <td
+                  className="px-4 py-8 text-center text-[#7a2f25]"
+                  colSpan={6}
+                >
                   {invoiceError}
                 </td>
               </tr>
             ) : isLoadingInvoices ? (
               <tr>
-                <td className="px-4 py-8 text-center text-[#526157]" colSpan={6}>
-                  Loading invoices...
+                <td
+                  className="px-4 py-8 text-center text-[#6f5f4b]"
+                  colSpan={6}
+                >
+                  Luigi is loading invoices...
                 </td>
               </tr>
             ) : invoices.length === 0 ? (
               <tr>
-                <td className="px-4 py-8 text-center text-[#526157]" colSpan={6}>
+                <td
+                  className="px-4 py-8 text-center text-[#6f5f4b]"
+                  colSpan={6}
+                >
                   No invoices loaded yet.
                 </td>
               </tr>
             ) : (
               visibleInvoices.map((invoice) => (
                 <tr
-                  className="border-t border-[#edf0eb]"
+                  className="border-t border-[#f0e7d6]"
                   key={invoice.invoiceID ?? invoice.invoiceNumber}
                 >
                   <td className="px-4 py-3 font-medium">
                     {invoice.invoiceNumber ?? "No number"}
                   </td>
-                  <td className="px-4 py-3">{invoice.contactName ?? "Unknown"}</td>
+                  <td className="px-4 py-3">
+                    {invoice.contactName ?? "Unknown"}
+                  </td>
                   <td className="px-4 py-3">{invoice.status ?? "-"}</td>
                   <td className="px-4 py-3">
                     {invoice.dueDate ? formatInvoiceDate(invoice.dueDate) : "-"}
@@ -1132,10 +1222,10 @@ function ReviewView({
 }) {
   const [question, setQuestion] = useState(initialQuestion);
   const suggestionButtons = [
-    "Chase overdue invoices",
-    "Analyse our cash flow position",
-    "How is the business performing?",
-    "Which customers are the biggest credit risk?",
+    "Luigi, who should Alice chase first today?",
+    "Luigi, what cash is at risk this week?",
+    "Luigi, how is the roastery performing?",
+    "Luigi, which café customers are the biggest credit risk?",
   ];
   const lastTurn =
     agentTurns.length > 0 ? agentTurns[agentTurns.length - 1] : null;
@@ -1157,19 +1247,20 @@ function ReviewView({
 
   return (
     <section className="flex flex-col gap-4">
-      <div className="rounded-md border border-[#d7ddd4] bg-white p-5">
+      <div className="rounded-2xl border border-[#e4d2b8] bg-[#fffaf4] p-5">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-lg font-semibold">Ask the agent</h2>
-            <p className="mt-1 text-sm text-[#526157]">
-              The agent has live read-only tools over your Xero data — invoices,
-              reports, payments, contacts — and remembers this conversation, so
-              you can follow up on its findings.
+            <h2 className="text-lg font-semibold">Ask Luigi</h2>
+            <p className="mt-1 text-sm leading-6 text-[#6f5f4b]">
+              Luigi has live read-only tools over Alice&apos;s Xero data:
+              invoices, reports, payments, contacts, and customer risk signals.
+              He remembers this conversation, so you can follow up on his
+              findings.
             </p>
           </div>
           {agentTurns.length > 0 ? (
             <button
-              className="inline-flex h-9 shrink-0 items-center justify-center rounded-md border border-[#b9c3b7] bg-white px-3 text-sm font-medium text-[#17211b] transition hover:bg-[#eef2ec] disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-9 shrink-0 items-center justify-center rounded-full border border-[#cdbba1] bg-[#fffaf4] px-3 text-sm font-medium text-[#2f2417] transition hover:bg-[#f3ead9] disabled:cursor-not-allowed disabled:opacity-50"
               disabled={isAgentRunning}
               onClick={resetConversation}
               type="button"
@@ -1179,25 +1270,28 @@ function ReviewView({
           ) : null}
         </div>
 
-        <form className="mt-4 flex flex-col gap-3 sm:flex-row" onSubmit={submitQuestion}>
+        <form
+          className="mt-4 flex flex-col gap-3 sm:flex-row"
+          onSubmit={submitQuestion}
+        >
           <input
-            className="h-12 min-w-0 flex-1 rounded-md border border-[#b9c3b7] bg-white px-4 text-sm outline-none transition placeholder:text-[#8b978e] focus:border-[#0f6f4d] focus:ring-2 focus:ring-[#cfe4da]"
+            className="h-12 min-w-0 flex-1 rounded-full border border-[#cdbba1] bg-[#fffaf4] px-4 text-sm outline-none transition placeholder:text-[#a3907a] focus:border-[#6f2f1f] focus:ring-2 focus:ring-[#eadbc3]"
             disabled={!status.isConnected || isAgentRunning}
             onChange={(event) => setQuestion(event.target.value)}
             placeholder={
               agentTurns.length > 0
-                ? "Ask a follow-up — the agent remembers this conversation"
-                : "Ask about cash flow, overdue invoices, spending, or customer risk"
+                ? "Ask a follow-up — Luigi remembers this conversation"
+                : "Ask Luigi about overdue café invoices, cash flow, spending, or customer risk"
             }
             type="text"
             value={question}
           />
           <button
-            className="inline-flex h-12 items-center justify-center rounded-md bg-[#0f6f4d] px-5 text-sm font-semibold text-white transition hover:bg-[#0b5d40] disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-12 items-center justify-center rounded-full bg-[#6f2f1f] px-5 text-sm font-semibold text-white transition hover:bg-[#572417] disabled:cursor-not-allowed disabled:opacity-50"
             disabled={!status.isConnected || isAgentRunning || !question.trim()}
             type="submit"
           >
-            {isAgentRunning ? "Working..." : "Ask"}
+            {isAgentRunning ? "Brewing..." : "Ask Luigi"}
           </button>
         </form>
 
@@ -1205,7 +1299,7 @@ function ReviewView({
           <div className="mt-3 flex flex-wrap gap-2">
             {suggestionButtons.map((suggestion) => (
               <button
-                className="inline-flex h-9 items-center justify-center rounded-md border border-[#b9c3b7] bg-white px-3 text-sm font-medium text-[#17211b] transition hover:bg-[#eef2ec] disabled:cursor-not-allowed disabled:border-[#d7ddd4] disabled:text-[#9aa49d]"
+                className="inline-flex min-h-9 items-center justify-center rounded-full border border-[#cdbba1] bg-[#fffaf4] px-3 py-1.5 text-sm font-medium text-[#2f2417] transition hover:bg-[#f3ead9] disabled:cursor-not-allowed disabled:border-[#e4d2b8] disabled:text-[#bcab94]"
                 disabled={!status.isConnected || isAgentRunning}
                 key={suggestion}
                 onClick={() => void runAgent(suggestion)}
@@ -1218,32 +1312,29 @@ function ReviewView({
         ) : null}
 
         {lockedTools.length > 0 ? (
-          <p className="mt-3 rounded-md border border-[#ead0a2] bg-[#fff8e8] px-3 py-2 text-xs text-[#6d4c16]">
-            {lockedTools.length} abilities are not covered by your current Xero
-            token. Disconnecting and reconnecting unlocks any that your Xero app
-            configuration allows.
+          <p className="mt-3 rounded-2xl border border-[#ead0a2] bg-[#fff8e8] px-3 py-2 text-xs text-[#6d4c16]">
+            {lockedTools.length} Luigi abilities are not covered by your current
+            Xero token. Disconnecting and reconnecting unlocks any that your
+            Xero app configuration allows.
           </p>
         ) : null}
 
-        <div className="mt-5 grid gap-3 border-t border-[#edf0eb] pt-4 text-sm sm:grid-cols-4">
+        <div className="mt-5 grid gap-3 border-t border-[#f0e7d6] pt-4 text-sm sm:grid-cols-4">
           <ReviewContextItem label="Invoices" value={String(invoices.length)} />
           <ReviewContextItem
-            label="Agent"
-            value={isAgentRunning ? "Running" : lastTurn ? "Ready" : "Idle"}
+            label="Luigi"
+            value={isAgentRunning ? "Working" : lastTurn ? "Ready" : "Idle"}
           />
-          <ReviewContextItem
-            label="Turns"
-            value={String(agentTurns.length)}
-          />
+          <ReviewContextItem label="Turns" value={String(agentTurns.length)} />
           <ReviewContextItem label="Findings" value={String(findingCount)} />
         </div>
       </div>
 
       {agentTurns.length === 0 ? (
-        <div className="rounded-md border border-[#d7ddd4] bg-white px-5 py-14 text-center text-sm text-[#526157]">
-          Ask a question or pick a suggestion. The agent chooses which Xero
-          tools to call, shows its working, and suggests follow-up actions you
-          can run with one click.
+        <div className="rounded-2xl border border-[#e4d2b8] bg-[#fffaf4] px-5 py-14 text-center text-sm text-[#6f5f4b]">
+          Ask Luigi a question or pick a suggestion. Luigi chooses which Xero
+          MCP tools to call, shows his working, and suggests follow-up actions
+          Alice can take.
         </div>
       ) : null}
 
@@ -1255,7 +1346,7 @@ function ReviewView({
 
         return (
           <div className="flex flex-col gap-4" key={turn.id}>
-            <div className="max-w-xl self-end rounded-md bg-[#0f6f4d] px-4 py-2.5 text-sm font-medium leading-6 text-white">
+            <div className="max-w-xl self-end rounded-2xl bg-[#6f2f1f] px-4 py-2.5 text-sm font-medium leading-6 text-white">
               {turn.question}
             </div>
 
@@ -1265,21 +1356,21 @@ function ReviewView({
             />
 
             {turn.result ? (
-              <div className="rounded-md border border-[#d7ddd4] bg-white">
-                <div className="border-b border-[#edf0eb] px-5 py-4">
+              <div className="overflow-hidden rounded-2xl border border-[#e4d2b8] bg-[#fffaf4]">
+                <div className="border-b border-[#f0e7d6] px-5 py-4">
                   {turn.result.answer ? (
-                    <div className="max-w-4xl rounded-md bg-[#eef2ec] px-4 py-3 text-sm font-medium leading-6 text-[#17211b]">
+                    <div className="max-w-4xl rounded-2xl bg-[#f3ead9] px-4 py-3 text-sm font-medium leading-6 text-[#2f2417]">
                       {turn.result.answer}
                     </div>
                   ) : null}
                   {turn.result.summary ? (
-                    <p className="mt-3 max-w-4xl text-sm leading-6 text-[#526157]">
+                    <p className="mt-3 max-w-4xl text-sm leading-6 text-[#6f5f4b]">
                       {turn.result.summary}
                     </p>
                   ) : null}
                 </div>
                 {turnInsights.length > 0 ? (
-                  <div className="grid gap-3 border-b border-[#edf0eb] px-5 py-4 sm:grid-cols-2">
+                  <div className="grid gap-3 border-b border-[#f0e7d6] px-5 py-4 sm:grid-cols-2">
                     {turnInsights.map((insight) => (
                       <InsightCard
                         insight={insight}
@@ -1288,71 +1379,76 @@ function ReviewView({
                     ))}
                   </div>
                 ) : null}
-                <div className="divide-y divide-[#edf0eb]">
+                <div className="divide-y divide-[#f0e7d6]">
                   {turnReviews.map((item) => (
-                <article className="px-5 py-5" key={`${item.rank}-${item.invoiceNumber}`}>
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-semibold text-[#526157]">
-                        #{item.rank}
-                      </span>
-                      <h3 className="text-lg font-semibold">
-                        {item.invoiceNumber} · {item.contactName}
-                      </h3>
-                    </div>
-                    <p className="mt-2 text-sm leading-6 text-[#526157]">
-                      {item.reason}
-                    </p>
-                  </div>
-                  <span
-                    className={`rounded-md px-2 py-1 text-xs font-semibold capitalize ${
-                      item.priority === "high"
-                        ? "bg-[#f7dfdc] text-[#7a2f25]"
-                        : item.priority === "medium"
-                          ? "bg-[#fff0c2] text-[#6d4c16]"
-                          : "bg-[#e6eee9] text-[#0f6f4d]"
-                    }`}
-                  >
-                    {item.priority}
-                  </span>
-                </div>
+                    <article
+                      className="px-5 py-5"
+                      key={`${item.rank}-${item.invoiceNumber}`}
+                    >
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-semibold text-[#6f5f4b]">
+                              #{item.rank}
+                            </span>
+                            <h3 className="text-lg font-semibold">
+                              {item.invoiceNumber} · {item.contactName}
+                            </h3>
+                          </div>
+                          <p className="mt-2 text-sm leading-6 text-[#6f5f4b]">
+                            {item.reason}
+                          </p>
+                        </div>
+                        <span
+                          className={`rounded-full px-3 py-1 text-xs font-semibold capitalize ${
+                            item.priority === "high"
+                              ? "bg-[#f7dfdc] text-[#7a2f25]"
+                              : item.priority === "medium"
+                                ? "bg-[#fff0c2] text-[#6d4c16]"
+                                : "bg-[#eadbc3] text-[#6f2f1f]"
+                          }`}
+                        >
+                          {item.priority}
+                        </span>
+                      </div>
 
-                <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
-                  <div>
-                    <dt className="text-[#526157]">Amount due</dt>
-                    <dd className="font-semibold">
-                      {new Intl.NumberFormat("en-GB", {
-                        style: "currency",
-                        currency: item.currencyCode || "GBP",
-                      }).format(item.amountDue)}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-[#526157]">Days past due</dt>
-                    <dd className="font-semibold">{item.daysPastDue}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-[#526157]">Action</dt>
-                    <dd className="font-semibold">{item.recommendedAction}</dd>
-                  </div>
-                </dl>
+                      <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
+                        <div>
+                          <dt className="text-[#6f5f4b]">Amount due</dt>
+                          <dd className="font-semibold">
+                            {new Intl.NumberFormat("en-GB", {
+                              style: "currency",
+                              currency: item.currencyCode || "GBP",
+                            }).format(item.amountDue)}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt className="text-[#6f5f4b]">Days past due</dt>
+                          <dd className="font-semibold">{item.daysPastDue}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-[#6f5f4b]">Luigi’s action</dt>
+                          <dd className="font-semibold">
+                            {item.recommendedAction}
+                          </dd>
+                        </div>
+                      </dl>
 
-                <EditableEmailDraft item={item} />
-              </article>
+                      <EditableEmailDraft item={item} />
+                    </article>
                   ))}
                 </div>
                 {isLastTurn ? (
-                  <div className="border-t border-[#edf0eb] px-5 py-4">
+                  <div className="border-t border-[#f0e7d6] px-5 py-4">
                     {followUps.length > 0 ? (
                       <>
-                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#8b978e]">
-                          Suggested next steps
+                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#a3907a]">
+                          Suggested next pours
                         </p>
                         <div className="mt-2 flex flex-wrap gap-2">
                           {followUps.map((followUp) => (
                             <button
-                              className="inline-flex min-h-9 items-center justify-center rounded-md border border-[#cfe4da] bg-[#f4f9f6] px-3 py-1.5 text-left text-sm font-medium text-[#0f6f4d] transition hover:bg-[#e6eee9] disabled:cursor-not-allowed disabled:opacity-50"
+                              className="inline-flex min-h-9 items-center justify-center rounded-full border border-[#eadbc3] bg-[#f6efe0] px-3 py-1.5 text-left text-sm font-medium text-[#6f2f1f] transition hover:bg-[#eadbc3] disabled:cursor-not-allowed disabled:opacity-50"
                               disabled={isAgentRunning}
                               key={followUp}
                               onClick={() => void runAgent(followUp)}
@@ -1364,7 +1460,10 @@ function ReviewView({
                         </div>
                       </>
                     ) : null}
-                    <FollowUpForm disabled={isAgentRunning} runAgent={runAgent} />
+                    <FollowUpForm
+                      disabled={isAgentRunning}
+                      runAgent={runAgent}
+                    />
                   </div>
                 ) : null}
               </div>
@@ -1400,15 +1499,15 @@ function FollowUpForm({
   return (
     <form className="mt-3 flex flex-col gap-2 sm:flex-row" onSubmit={submit}>
       <input
-        className="h-10 min-w-0 flex-1 rounded-md border border-[#b9c3b7] bg-white px-3 text-sm outline-none transition placeholder:text-[#8b978e] focus:border-[#0f6f4d] focus:ring-2 focus:ring-[#cfe4da]"
+        className="h-10 min-w-0 flex-1 rounded-full border border-[#cdbba1] bg-[#fffaf4] px-3 text-sm outline-none transition placeholder:text-[#a3907a] focus:border-[#6f2f1f] focus:ring-2 focus:ring-[#eadbc3]"
         disabled={disabled}
         onChange={(event) => setFollowUp(event.target.value)}
-        placeholder="Or type your own follow-up..."
+        placeholder="Or ask Luigi a follow-up..."
         type="text"
         value={followUp}
       />
       <button
-        className="inline-flex h-10 items-center justify-center rounded-md bg-[#0f6f4d] px-4 text-sm font-semibold text-white transition hover:bg-[#0b5d40] disabled:cursor-not-allowed disabled:opacity-50"
+        className="inline-flex h-10 items-center justify-center rounded-full bg-[#6f2f1f] px-4 text-sm font-semibold text-white transition hover:bg-[#572417] disabled:cursor-not-allowed disabled:opacity-50"
         disabled={disabled || !followUp.trim()}
         type="submit"
       >
@@ -1431,7 +1530,7 @@ function AgentProgress({
       steps
         .filter((step) => step.kind === "tool")
         .map((step) =>
-          step.tool ? agentToolSources[step.tool] ?? step.tool : step.label,
+          step.tool ? (agentToolSources[step.tool] ?? step.tool) : step.label,
         ),
     ),
   );
@@ -1440,13 +1539,13 @@ function AgentProgress({
     const current = steps.length > 0 ? steps[steps.length - 1] : null;
 
     return (
-      <div className="flex items-center gap-3 rounded-md border border-[#d7ddd4] bg-white px-4 py-3.5">
+      <div className="flex items-center gap-3 rounded-2xl border border-[#e4d2b8] bg-[#fffaf4] px-4 py-3.5">
         <span
           aria-hidden
-          className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-[#cfe4da] border-t-[#0f6f4d]"
+          className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-[#eadbc3] border-t-[#6f2f1f]"
         />
-        <p className="text-sm font-medium text-[#17211b]">
-          {current?.label ?? "Pondering the numbers..."}
+        <p className="text-sm font-medium text-[#2f2417]">
+          {current?.label ?? "Luigi is thinking over the numbers..."}
         </p>
       </div>
     );
@@ -1454,7 +1553,7 @@ function AgentProgress({
 
   if (errors.length > 0) {
     return (
-      <div className="rounded-md border border-[#d8bbb6] bg-[#fbefed] px-4 py-3 text-sm text-[#7a2f25]">
+      <div className="rounded-2xl border border-[#d8bbb6] bg-[#fbefed] px-4 py-3 text-sm text-[#7a2f25]">
         {errors[errors.length - 1].label}
       </div>
     );
@@ -1465,8 +1564,8 @@ function AgentProgress({
   }
 
   return (
-    <p className="px-1 text-xs text-[#8b978e]">
-      Checked: {checkedSources.join(" · ")}
+    <p className="px-1 text-xs text-[#a3907a]">
+      Luigi checked: {checkedSources.join(" · ")}
     </p>
   );
 }
@@ -1475,22 +1574,22 @@ function InsightCard({ insight }: { insight: AgentInsight }) {
   const severity = insight.severity ?? "watch";
 
   return (
-    <div className="rounded-md border border-[#d7ddd4] bg-[#fbfcfa] p-4">
+    <div className="rounded-2xl border border-[#e4d2b8] bg-[#fbf6ec] p-4">
       <div className="flex items-start justify-between gap-3">
         <h3 className="text-sm font-semibold">{insight.title}</h3>
         <span
-          className={`rounded-md px-2 py-1 text-xs font-semibold capitalize ${
+          className={`rounded-full px-3 py-1 text-xs font-semibold capitalize ${
             severity === "risk"
               ? "bg-[#f7dfdc] text-[#7a2f25]"
               : severity === "watch"
                 ? "bg-[#fff0c2] text-[#6d4c16]"
-                : "bg-[#e6eee9] text-[#0f6f4d]"
+                : "bg-[#eadbc3] text-[#6f2f1f]"
           }`}
         >
           {severity}
         </span>
       </div>
-      <p className="mt-2 text-sm leading-6 text-[#526157]">{insight.detail}</p>
+      <p className="mt-2 text-sm leading-6 text-[#6f5f4b]">{insight.detail}</p>
     </div>
   );
 }
@@ -1516,11 +1615,11 @@ function EditableEmailDraft({ item }: { item: InvoiceReview }) {
   }
 
   return (
-    <div className="mt-4 rounded-md border border-[#d7ddd4] bg-[#fbfcfa] p-4">
+    <div className="mt-4 rounded-2xl border border-[#e4d2b8] bg-[#fbf6ec] p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-sm font-semibold">Draft email</p>
+        <p className="text-sm font-semibold">Luigi’s draft nudge</p>
         <button
-          className="inline-flex h-9 items-center justify-center rounded-md border border-[#b9c3b7] bg-white px-3 text-sm font-semibold text-[#17211b] transition hover:bg-[#eef2ec]"
+          className="inline-flex h-9 items-center justify-center rounded-full border border-[#cdbba1] bg-[#fffaf4] px-3 text-sm font-semibold text-[#2f2417] transition hover:bg-[#f3ead9]"
           onClick={copyDraft}
           type="button"
         >
@@ -1532,21 +1631,27 @@ function EditableEmailDraft({ item }: { item: InvoiceReview }) {
         </button>
       </div>
 
-      <label className="mt-4 block text-sm font-medium" htmlFor={`subject-${item.rank}`}>
+      <label
+        className="mt-4 block text-sm font-medium"
+        htmlFor={`subject-${item.rank}`}
+      >
         Subject
       </label>
       <input
-        className="mt-2 h-10 w-full rounded-md border border-[#b9c3b7] bg-white px-3 text-sm outline-none transition focus:border-[#0f6f4d] focus:ring-2 focus:ring-[#cfe4da]"
+        className="mt-2 h-10 w-full rounded-full border border-[#cdbba1] bg-[#fffaf4] px-3 text-sm outline-none transition focus:border-[#6f2f1f] focus:ring-2 focus:ring-[#eadbc3]"
         id={`subject-${item.rank}`}
         onChange={(event) => setSubject(event.target.value)}
         value={subject}
       />
 
-      <label className="mt-4 block text-sm font-medium" htmlFor={`body-${item.rank}`}>
+      <label
+        className="mt-4 block text-sm font-medium"
+        htmlFor={`body-${item.rank}`}
+      >
         Body
       </label>
       <textarea
-        className="mt-2 min-h-56 w-full resize-y rounded-md border border-[#b9c3b7] bg-white px-3 py-3 text-sm leading-6 outline-none transition focus:border-[#0f6f4d] focus:ring-2 focus:ring-[#cfe4da]"
+        className="mt-2 min-h-56 w-full resize-y rounded-2xl border border-[#cdbba1] bg-[#fffaf4] px-3 py-3 text-sm leading-6 outline-none transition focus:border-[#6f2f1f] focus:ring-2 focus:ring-[#eadbc3]"
         id={`body-${item.rank}`}
         onChange={(event) => setBody(event.target.value)}
         value={body}
@@ -1558,7 +1663,7 @@ function EditableEmailDraft({ item }: { item: InvoiceReview }) {
 function ReviewContextItem({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="text-[#526157]">{label}</p>
+      <p className="text-[#6f5f4b]">{label}</p>
       <p className="mt-1 font-semibold">{value}</p>
     </div>
   );
