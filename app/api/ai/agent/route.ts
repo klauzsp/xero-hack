@@ -6,8 +6,13 @@ export const runtime = "nodejs";
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => ({}))) as {
     question?: string;
+    previousInteractionId?: string;
   };
   const question = body.question?.trim() || "Check invoices";
+  const previousInteractionId =
+    typeof body.previousInteractionId === "string"
+      ? body.previousInteractionId
+      : null;
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -17,7 +22,7 @@ export async function POST(request: Request) {
       };
 
       try {
-        await runXeroAgent(question, emit);
+        await runXeroAgent(question, emit, previousInteractionId);
       } catch (error) {
         emit({ type: "error", message: getErrorDetail(error) });
       } finally {

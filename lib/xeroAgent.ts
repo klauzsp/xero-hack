@@ -11,7 +11,7 @@ export type AgentEvent =
   | { type: "abilities"; tools: string[]; locked: string[] }
   | { type: "tool_call"; tool: string; args: Record<string, unknown> }
   | { type: "tool_result"; tool: string; preview: string }
-  | { type: "answer"; result: AgentResult }
+  | { type: "answer"; result: AgentResult; interactionId?: string }
   | { type: "error"; message: string };
 
 export type AgentInsight = {
@@ -39,6 +39,7 @@ export type AgentResult = {
   summary?: string;
   insights?: AgentInsight[];
   reviews?: AgentReview[];
+  followUps?: string[];
 };
 
 type GeminiStep = {
@@ -201,8 +202,10 @@ function buildSystemInstruction(today: string, tenantName: string) {
     `You are Ledger, an autonomous finance agent embedded in a dashboard connected to the Xero organisation "${tenantName}". Today is ${today}.`,
     "You have live read-only tools over the organisation's Xero data. Before answering, call the tools you need: list-invoices for chasing debtors; list-profit-and-loss, list-report-balance-sheet, list-trial-balance, list-bank-transactions, and list-payments for cash flow, spending, and performance questions; list-contacts plus list-aged-receivables-by-contact for customer credit risk. Call as few tools as necessary and stop once you have enough evidence.",
     "Every figure in your answer must come from tool results. Never invent data. If a tool errors because of missing permissions, say so plainly and answer with what you have.",
-    'When you are finished, reply with ONLY valid JSON in this shape: {"answer":"direct answer to the user","summary":"short analytical summary of what you examined","insights":[{"title":"string","detail":"string","severity":"good|watch|risk"}],"reviews":[{"rank":1,"invoiceNumber":"string","contactName":"string","amountDue":0,"currencyCode":"string","daysPastDue":0,"priority":"high|medium|low","reason":"string","recommendedAction":"string","emailSubject":"string","emailBody":"string"}]}.',
-    "Use insights (2-6 items) for analysis questions such as cash flow, performance, trends, or risk; leave it empty otherwise. Use reviews with ranked follow-ups and concise professional email drafts ONLY when the user wants to chase or collect invoices; leave it empty otherwise.",
+    "You may be in an ongoing conversation: earlier turns, their tool results, and your previous findings are context. When the user gives a follow-up instruction such as \"draft emails for those\", act on the entities you identified earlier without re-asking, and only call tools again if you are missing details.",
+    'When you are finished, reply with ONLY valid JSON in this shape: {"answer":"direct answer to the user","summary":"short analytical summary of what you examined","insights":[{"title":"string","detail":"string","severity":"good|watch|risk"}],"reviews":[{"rank":1,"invoiceNumber":"string","contactName":"string","amountDue":0,"currencyCode":"string","daysPastDue":0,"priority":"high|medium|low","reason":"string","recommendedAction":"string","emailSubject":"string","emailBody":"string"}],"followUps":["string"]}.',
+    "Use insights (2-6 items) for analysis questions such as cash flow, performance, trends, or risk; leave it empty otherwise. Use reviews with ranked follow-ups and concise professional email drafts whenever the user wants to chase, collect, or draft emails about invoices; leave it empty otherwise.",
+    'followUps is REQUIRED and must never be empty: give 2-4 short, concrete next actions the user might ask for, phrased as requests and grounded in what you just found, e.g. ["Draft chase emails for the three late payers","Compare this quarter\'s P&L with last quarter","Check which suppliers we owe money to"].',
   ].join("\n");
 }
 
@@ -229,9 +232,20 @@ function parseAgentResult(text: string): AgentResult {
       summary: parsed.summary,
       insights: Array.isArray(parsed.insights) ? parsed.insights : [],
       reviews: Array.isArray(parsed.reviews) ? parsed.reviews : [],
+      followUps: Array.isArray(parsed.followUps)
+        ? parsed.followUps.filter(
+            (item): item is string => typeof item === "string",
+          )
+        : [],
     };
   } catch {
-    return { answer: trimmed, summary: "", insights: [], reviews: [] };
+    return {
+      answer: trimmed,
+      summary: "",
+      insights: [],
+      reviews: [],
+      followUps: [],
+    };
   }
 }
 
@@ -276,6 +290,7 @@ async function callGemini(apiKey: string, payload: Record<string, unknown>) {
 export async function runXeroAgent(
   question: string,
   emit: (event: AgentEvent) => void,
+  previousInteractionId?: string | null,
 ) {
   const apiKey = process.env.GEMINI_API_KEY;
 
@@ -333,6 +348,11 @@ export async function runXeroAgent(
       input: question,
       tools: geminiTools,
       generation_config: generationConfig,
+      // Continue the stored server-side conversation so follow-up requests
+      // ("draft emails for those") keep the context of earlier turns.
+      ...(previousInteractionId
+        ? { previous_interaction_id: previousInteractionId }
+        : {}),
     };
 
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
@@ -382,6 +402,7 @@ export async function runXeroAgent(
       emit({
         type: "answer",
         result: parseAgentResult(extractOutputText(interaction)),
+        interactionId: interaction.id,
       });
       return;
     }

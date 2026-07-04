@@ -65,6 +65,7 @@ type AgentResult = {
   summary?: string;
   insights?: AgentInsight[];
   reviews?: InvoiceReview[];
+  followUps?: string[];
 };
 
 type AgentStreamEvent =
@@ -72,8 +73,15 @@ type AgentStreamEvent =
   | { type: "abilities"; tools: string[]; locked: string[] }
   | { type: "tool_call"; tool: string; args?: Record<string, unknown> }
   | { type: "tool_result"; tool: string; preview?: string }
-  | { type: "answer"; result: AgentResult }
+  | { type: "answer"; result: AgentResult; interactionId?: string }
   | { type: "error"; message: string };
+
+type AgentTurn = {
+  id: number;
+  question: string;
+  steps: AgentTraceStep[];
+  result: AgentResult | null;
+};
 
 type AgentTraceStep = {
   id: number;
@@ -140,12 +148,13 @@ export function XeroApp({ view }: { view: AppView }) {
   const [isLoadingInvoices, setIsLoadingInvoices] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [isAgentRunning, setIsAgentRunning] = useState(false);
-  const [agentSteps, setAgentSteps] = useState<AgentTraceStep[]>([]);
-  const [agentResult, setAgentResult] = useState<AgentResult | null>(null);
+  const [agentTurns, setAgentTurns] = useState<AgentTurn[]>([]);
   const [lockedTools, setLockedTools] = useState<string[]>([]);
   const [invoiceError, setInvoiceError] = useState<string | null>(null);
   const [hasLoadedInvoices, setHasLoadedInvoices] = useState(false);
   const traceIdRef = useRef(0);
+  const turnIdRef = useRef(0);
+  const interactionIdRef = useRef<string | null>(null);
 
   const currency = invoices.find((invoice) => invoice.currencyCode)?.currencyCode ?? "GBP";
   const money = useMemo(
@@ -287,11 +296,22 @@ export function XeroApp({ view }: { view: AppView }) {
     }
   }
 
+  function updateLastTurn(update: (turn: AgentTurn) => AgentTurn) {
+    setAgentTurns((turns) =>
+      turns.length === 0
+        ? turns
+        : [...turns.slice(0, -1), update(turns[turns.length - 1])],
+    );
+  }
+
   function appendTraceStep(step: Omit<AgentTraceStep, "id">) {
     traceIdRef.current += 1;
     const id = traceIdRef.current;
 
-    setAgentSteps((steps) => [...steps, { ...step, id }]);
+    updateLastTurn((turn) => ({
+      ...turn,
+      steps: [...turn.steps, { ...step, id }],
+    }));
   }
 
   function handleAgentEvent(event: AgentStreamEvent) {
@@ -321,25 +341,32 @@ export function XeroApp({ view }: { view: AppView }) {
         });
         break;
       case "tool_result":
-        setAgentSteps((steps) => {
-          for (let index = steps.length - 1; index >= 0; index--) {
-            const step = steps[index];
+        updateLastTurn((turn) => {
+          for (let index = turn.steps.length - 1; index >= 0; index--) {
+            const step = turn.steps[index];
 
             if (step.kind === "tool" && step.tool === event.tool && !step.done) {
-              return steps.map((nextStep, nextIndex) =>
-                nextIndex === index ? { ...nextStep, done: true } : nextStep,
-              );
+              return {
+                ...turn,
+                steps: turn.steps.map((nextStep, nextIndex) =>
+                  nextIndex === index ? { ...nextStep, done: true } : nextStep,
+                ),
+              };
             }
           }
 
-          return steps;
+          return turn;
         });
         break;
       case "answer": {
         const insightCount = event.result.insights?.length ?? 0;
         const reviewCount = event.result.reviews?.length ?? 0;
 
-        setAgentResult(event.result);
+        if (event.interactionId) {
+          interactionIdRef.current = event.interactionId;
+        }
+
+        updateLastTurn((turn) => ({ ...turn, result: event.result }));
         setMessage(
           `Agent finished with ${insightCount} insight(s) and ${reviewCount} follow-up(s).`,
         );
@@ -352,10 +379,19 @@ export function XeroApp({ view }: { view: AppView }) {
     }
   }
 
+  function resetConversation() {
+    interactionIdRef.current = null;
+    setAgentTurns([]);
+    setMessage("Started a new conversation with the agent.");
+  }
+
   async function runAgent(question = "Check invoices") {
+    turnIdRef.current += 1;
+    setAgentTurns((turns) => [
+      ...turns,
+      { id: turnIdRef.current, question, steps: [], result: null },
+    ]);
     setIsAgentRunning(true);
-    setAgentResult(null);
-    setAgentSteps([]);
     setMessage("Agent is planning which Xero data to pull...");
 
     try {
@@ -364,7 +400,10 @@ export function XeroApp({ view }: { view: AppView }) {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ question }),
+        body: JSON.stringify({
+          question,
+          previousInteractionId: interactionIdRef.current ?? undefined,
+        }),
       });
 
       if (!response.ok || !response.body) {
@@ -486,12 +525,11 @@ export function XeroApp({ view }: { view: AppView }) {
           />
         ) : (
           <ReviewView
-            agentResult={agentResult}
-            agentSteps={agentSteps}
+            agentTurns={agentTurns}
             invoices={invoices}
             isAgentRunning={isAgentRunning}
-            isLoadingInvoices={isLoadingInvoices}
             lockedTools={lockedTools}
+            resetConversation={resetConversation}
             runAgent={runAgent}
             status={status}
           />
@@ -724,21 +762,19 @@ function InvoiceTable({
 }
 
 function ReviewView({
-  agentResult,
-  agentSteps,
+  agentTurns,
   invoices,
   isAgentRunning,
-  isLoadingInvoices,
   lockedTools,
+  resetConversation,
   runAgent,
   status,
 }: {
-  agentResult: AgentResult | null;
-  agentSteps: AgentTraceStep[];
+  agentTurns: AgentTurn[];
   invoices: Invoice[];
   isAgentRunning: boolean;
-  isLoadingInvoices: boolean;
   lockedTools: string[];
+  resetConversation: () => void;
   runAgent: (question?: string) => Promise<void>;
   status: Status;
 }) {
@@ -749,8 +785,11 @@ function ReviewView({
     "How is the business performing?",
     "Which customers are the biggest credit risk?",
   ];
-  const insights = agentResult?.insights ?? [];
-  const reviews = agentResult?.reviews ?? [];
+  const lastTurn =
+    agentTurns.length > 0 ? agentTurns[agentTurns.length - 1] : null;
+  const findingCount =
+    (lastTurn?.result?.insights?.length ?? 0) +
+    (lastTurn?.result?.reviews?.length ?? 0);
 
   async function submitQuestion(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -760,24 +799,32 @@ function ReviewView({
       return;
     }
 
+    setQuestion("");
     await runAgent(nextQuestion);
-  }
-
-  async function runSuggestion(suggestion: string) {
-    setQuestion(suggestion);
-    await runAgent(suggestion);
   }
 
   return (
     <section className="flex flex-col gap-4">
       <div className="rounded-md border border-[#d7ddd4] bg-white p-5">
-        <div>
-          <h2 className="text-lg font-semibold">Ask the agent</h2>
-          <p className="mt-1 text-sm text-[#526157]">
-            The agent has live read-only tools over your Xero data — invoices,
-            reports, payments, contacts — and decides which to use for each
-            question.
-          </p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold">Ask the agent</h2>
+            <p className="mt-1 text-sm text-[#526157]">
+              The agent has live read-only tools over your Xero data — invoices,
+              reports, payments, contacts — and remembers this conversation, so
+              you can follow up on its findings.
+            </p>
+          </div>
+          {agentTurns.length > 0 ? (
+            <button
+              className="inline-flex h-9 shrink-0 items-center justify-center rounded-md border border-[#b9c3b7] bg-white px-3 text-sm font-medium text-[#17211b] transition hover:bg-[#eef2ec] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={isAgentRunning}
+              onClick={resetConversation}
+              type="button"
+            >
+              New conversation
+            </button>
+          ) : null}
         </div>
 
         <form className="mt-4 flex flex-col gap-3 sm:flex-row" onSubmit={submitQuestion}>
@@ -785,7 +832,11 @@ function ReviewView({
             className="h-12 min-w-0 flex-1 rounded-md border border-[#b9c3b7] bg-white px-4 text-sm outline-none transition placeholder:text-[#8b978e] focus:border-[#0f6f4d] focus:ring-2 focus:ring-[#cfe4da]"
             disabled={!status.isConnected || isAgentRunning}
             onChange={(event) => setQuestion(event.target.value)}
-            placeholder="Ask about cash flow, overdue invoices, spending, or customer risk"
+            placeholder={
+              agentTurns.length > 0
+                ? "Ask a follow-up — the agent remembers this conversation"
+                : "Ask about cash flow, overdue invoices, spending, or customer risk"
+            }
             type="text"
             value={question}
           />
@@ -798,19 +849,21 @@ function ReviewView({
           </button>
         </form>
 
-        <div className="mt-3 flex flex-wrap gap-2">
-          {suggestionButtons.map((suggestion) => (
-            <button
-              className="inline-flex h-9 items-center justify-center rounded-md border border-[#b9c3b7] bg-white px-3 text-sm font-medium text-[#17211b] transition hover:bg-[#eef2ec] disabled:cursor-not-allowed disabled:border-[#d7ddd4] disabled:text-[#9aa49d]"
-              disabled={!status.isConnected || isAgentRunning}
-              key={suggestion}
-              onClick={() => void runSuggestion(suggestion)}
-              type="button"
-            >
-              {suggestion}
-            </button>
-          ))}
-        </div>
+        {agentTurns.length === 0 ? (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {suggestionButtons.map((suggestion) => (
+              <button
+                className="inline-flex h-9 items-center justify-center rounded-md border border-[#b9c3b7] bg-white px-3 text-sm font-medium text-[#17211b] transition hover:bg-[#eef2ec] disabled:cursor-not-allowed disabled:border-[#d7ddd4] disabled:text-[#9aa49d]"
+                disabled={!status.isConnected || isAgentRunning}
+                key={suggestion}
+                onClick={() => void runAgent(suggestion)}
+                type="button"
+              >
+                {suggestion}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         {lockedTools.length > 0 ? (
           <p className="mt-3 rounded-md border border-[#ead0a2] bg-[#fff8e8] px-3 py-2 text-xs text-[#6d4c16]">
@@ -824,56 +877,69 @@ function ReviewView({
           <ReviewContextItem label="Invoices" value={String(invoices.length)} />
           <ReviewContextItem
             label="Agent"
-            value={isAgentRunning ? "Running" : agentResult ? "Ready" : "Idle"}
+            value={isAgentRunning ? "Running" : lastTurn ? "Ready" : "Idle"}
           />
           <ReviewContextItem
-            label="Data"
-            value={isLoadingInvoices ? "Loading" : "Ready"}
+            label="Turns"
+            value={String(agentTurns.length)}
           />
-          <ReviewContextItem
-            label="Findings"
-            value={String(insights.length + reviews.length)}
-          />
+          <ReviewContextItem label="Findings" value={String(findingCount)} />
         </div>
       </div>
 
-      {agentSteps.length > 0 ? (
-        <AgentTrace isAgentRunning={isAgentRunning} steps={agentSteps} />
+      {agentTurns.length === 0 ? (
+        <div className="rounded-md border border-[#d7ddd4] bg-white px-5 py-14 text-center text-sm text-[#526157]">
+          Ask a question or pick a suggestion. The agent chooses which Xero
+          tools to call, shows its working, and suggests follow-up actions you
+          can run with one click.
+        </div>
       ) : null}
 
-      <div className="rounded-md border border-[#d7ddd4] bg-white">
-        {!agentResult ? (
-          <div className="px-5 py-14 text-center text-sm text-[#526157]">
-            {isAgentRunning
-              ? "The agent is working — watch its steps above as it pulls live Xero data."
-              : "Ask a question or pick a suggestion. The agent chooses which Xero tools to call and reports back with evidence."}
-          </div>
-        ) : (
-          <div>
-            <div className="border-b border-[#edf0eb] px-5 py-4">
-              {agentResult.answer ? (
-                <div className="max-w-4xl rounded-md bg-[#eef2ec] px-4 py-3 text-sm font-medium leading-6 text-[#17211b]">
-                  {agentResult.answer}
-                </div>
-              ) : null}
-              {agentResult.summary ? (
-                <p className="mt-3 max-w-4xl text-sm leading-6 text-[#526157]">
-                  {agentResult.summary}
-                </p>
-              ) : null}
+      {agentTurns.map((turn, turnIndex) => {
+        const isLastTurn = turnIndex === agentTurns.length - 1;
+        const turnInsights = turn.result?.insights ?? [];
+        const turnReviews = turn.result?.reviews ?? [];
+        const followUps = turn.result?.followUps ?? [];
+
+        return (
+          <div className="flex flex-col gap-4" key={turn.id}>
+            <div className="max-w-xl self-end rounded-md bg-[#0f6f4d] px-4 py-2.5 text-sm font-medium leading-6 text-white">
+              {turn.question}
             </div>
-            {insights.length > 0 ? (
-              <div className="grid gap-3 border-b border-[#edf0eb] px-5 py-4 sm:grid-cols-2">
-                {insights.map((insight) => (
-                  <InsightCard
-                    insight={insight}
-                    key={`${insight.title}-${insight.severity ?? "none"}`}
-                  />
-                ))}
-              </div>
+
+            {turn.steps.length > 0 ? (
+              <AgentTrace
+                isAgentRunning={isAgentRunning && isLastTurn && !turn.result}
+                steps={turn.steps}
+              />
             ) : null}
-            <div className="divide-y divide-[#edf0eb]">
-              {reviews.map((item) => (
+
+            {turn.result ? (
+              <div className="rounded-md border border-[#d7ddd4] bg-white">
+                <div className="border-b border-[#edf0eb] px-5 py-4">
+                  {turn.result.answer ? (
+                    <div className="max-w-4xl rounded-md bg-[#eef2ec] px-4 py-3 text-sm font-medium leading-6 text-[#17211b]">
+                      {turn.result.answer}
+                    </div>
+                  ) : null}
+                  {turn.result.summary ? (
+                    <p className="mt-3 max-w-4xl text-sm leading-6 text-[#526157]">
+                      {turn.result.summary}
+                    </p>
+                  ) : null}
+                </div>
+                {turnInsights.length > 0 ? (
+                  <div className="grid gap-3 border-b border-[#edf0eb] px-5 py-4 sm:grid-cols-2">
+                    {turnInsights.map((insight) => (
+                      <InsightCard
+                        insight={insight}
+                        key={`${insight.title}-${insight.severity ?? "none"}`}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+                <div className="divide-y divide-[#edf0eb]">
+                  {turnReviews.map((item) => (
                 <article className="px-5 py-5" key={`${item.rank}-${item.invoiceNumber}`}>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
@@ -924,11 +990,33 @@ function ReviewView({
 
                 <EditableEmailDraft item={item} />
               </article>
-              ))}
-            </div>
+                  ))}
+                </div>
+                {isLastTurn && followUps.length > 0 ? (
+                  <div className="border-t border-[#edf0eb] px-5 py-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#8b978e]">
+                      Suggested next steps
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {followUps.map((followUp) => (
+                        <button
+                          className="inline-flex min-h-9 items-center justify-center rounded-md border border-[#cfe4da] bg-[#f4f9f6] px-3 py-1.5 text-left text-sm font-medium text-[#0f6f4d] transition hover:bg-[#e6eee9] disabled:cursor-not-allowed disabled:opacity-50"
+                          disabled={isAgentRunning}
+                          key={followUp}
+                          onClick={() => void runAgent(followUp)}
+                          type="button"
+                        >
+                          {followUp}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
-        )}
-      </div>
+        );
+      })}
     </section>
   );
 }
