@@ -34,7 +34,7 @@ function parseJsonResponse(text: string) {
   return JSON.parse(jsonText);
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   const apiKey = process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
@@ -48,6 +48,10 @@ export async function POST() {
   }
 
   try {
+    const body = (await request.json().catch(() => ({}))) as {
+      question?: string;
+    };
+    const question = body.question?.trim() || "Check invoices";
     const invoiceResult = await fetchXeroInvoices(100);
 
     if (!invoiceResult.ok) {
@@ -74,6 +78,7 @@ export async function POST() {
       return Response.json({
         generatedAt: new Date().toISOString(),
         tenantName: invoiceResult.body.tenantName,
+        answer: "There are no outstanding invoices with due dates to review.",
         summary: "No outstanding invoices with due dates were found.",
         reviews: [],
       });
@@ -90,8 +95,8 @@ export async function POST() {
         body: JSON.stringify({
           model: process.env.GEMINI_MODEL ?? "gemini-3.5-flash",
           system_instruction:
-            "You are a careful accounts receivable agent. Rank overdue and risky invoices using payment urgency, amount due, days past due, customer context from invoice data, tone appropriateness, and practical next action. Do not invent facts. Draft concise, professional email copy that a human can review before sending.",
-          input: `Today is ${today}. Analyse these Xero invoice summaries and return only valid JSON with this shape: {"summary":"string","reviews":[{"rank":number,"invoiceNumber":"string","contactName":"string","amountDue":number,"currencyCode":"string","daysPastDue":number,"priority":"high|medium|low","reason":"string","recommendedAction":"string","emailSubject":"string","emailBody":"string"}]}. Invoice data: ${JSON.stringify(candidateInvoices)}`,
+            "You are a careful accounts receivable agent working inside a Xero-connected review tool. Answer the user's question using only the invoice data supplied. For invoice follow-up questions, rank overdue and risky invoices using payment urgency, amount due, days past due, customer exposure, tone appropriateness, and practical next action. Do not invent facts. Draft concise, professional email copy only when follow-up emails are relevant. Return only valid JSON.",
+          input: `Today is ${today}. User question: ${question}. Return only valid JSON with this shape: {"answer":"direct answer to the user","summary":"short analytical summary","reviews":[{"rank":number,"invoiceNumber":"string","contactName":"string","amountDue":number,"currencyCode":"string","daysPastDue":number,"priority":"high|medium|low","reason":"string","recommendedAction":"string","emailSubject":"string","emailBody":"string"}]}. If the user asks a general question that does not require email drafts, keep reviews empty. Invoice data: ${JSON.stringify(candidateInvoices)}`,
           generation_config: {
             temperature: 0.35,
             thinking_level: "low",
@@ -116,6 +121,7 @@ export async function POST() {
 
     const text = extractGeminiText(raw);
     const review = parseJsonResponse(text) as {
+      answer?: string;
       summary: string;
       reviews: unknown[];
     };

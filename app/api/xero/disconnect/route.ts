@@ -31,6 +31,7 @@ export async function POST() {
 
   try {
     const xero = createXeroClient();
+    await xero.initialize();
     xero.setTokenSet(connection.tokenSet);
 
     const tokenSet = xero.readTokenSet();

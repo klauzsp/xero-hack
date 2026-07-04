@@ -36,6 +36,21 @@ export function getErrorDetail(error: unknown) {
     return error.message;
   }
 
+  if (error && typeof error === "object") {
+    const responseBody = (error as { response?: { body?: unknown } }).response
+      ?.body;
+
+    if (responseBody) {
+      return JSON.stringify(responseBody);
+    }
+
+    const body = (error as { body?: unknown }).body;
+
+    if (body) {
+      return JSON.stringify(body);
+    }
+  }
+
   return "Unknown error";
 }
 
@@ -51,6 +66,7 @@ export async function fetchXeroInvoices(pageSize = 50) {
   }
 
   const xero = createXeroClient();
+  await xero.initialize();
   xero.setTokenSet(connection.tokenSet);
 
   const tokenSet = xero.readTokenSet();

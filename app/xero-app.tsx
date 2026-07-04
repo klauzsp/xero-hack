@@ -57,6 +57,7 @@ type InvoiceReview = {
 type InvoiceReviewResponse = {
   generatedAt: string;
   tenantName?: string;
+  answer?: string;
   summary: string;
   reviews: InvoiceReview[];
 };
@@ -82,6 +83,8 @@ export function XeroApp({ view }: { view: AppView }) {
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [isReviewing, setIsReviewing] = useState(false);
   const [review, setReview] = useState<InvoiceReviewResponse | null>(null);
+  const [invoiceError, setInvoiceError] = useState<string | null>(null);
+  const [hasLoadedInvoices, setHasLoadedInvoices] = useState(false);
 
   const currency = invoices.find((invoice) => invoice.currencyCode)?.currencyCode ?? "GBP";
   const money = useMemo(
@@ -153,15 +156,16 @@ export function XeroApp({ view }: { view: AppView }) {
   }, []);
 
   useEffect(() => {
-    if (!status.isConnected || invoices.length > 0 || isLoadingInvoices) {
+    if (!status.isConnected || hasLoadedInvoices || isLoadingInvoices) {
       return;
     }
 
     loadInvoices();
-  }, [status.isConnected, invoices.length, isLoadingInvoices]);
+  }, [status.isConnected, hasLoadedInvoices, isLoadingInvoices]);
 
   async function loadInvoices() {
     setIsLoadingInvoices(true);
+    setInvoiceError(null);
     setMessage("Requesting invoices from Xero...");
 
     try {
@@ -176,11 +180,15 @@ export function XeroApp({ view }: { view: AppView }) {
       }
 
       setInvoices(data.invoices);
+      setHasLoadedInvoices(true);
       setMessage(`Xero returned ${data.count} invoice record(s).`);
     } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Invoice request failed",
-      );
+      const nextError =
+        error instanceof Error ? error.message : "Invoice request failed";
+
+      setInvoiceError(nextError);
+      setHasLoadedInvoices(true);
+      setMessage(nextError);
     } finally {
       setIsLoadingInvoices(false);
     }
@@ -208,6 +216,8 @@ export function XeroApp({ view }: { view: AppView }) {
         canDisconnectFromXero: false,
       }));
       setInvoices([]);
+      setInvoiceError(null);
+      setHasLoadedInvoices(false);
       setMessage("Disconnected from Xero and cleared the local session.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Disconnect failed");
@@ -216,13 +226,18 @@ export function XeroApp({ view }: { view: AppView }) {
     }
   }
 
-  async function runInvoiceReview() {
+  async function runInvoiceReview(question = "Check invoices") {
     setIsReviewing(true);
+    setReview(null);
     setMessage("Running invoice review agent...");
 
     try {
       const response = await fetch("/api/ai/invoice-review", {
         method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ question }),
       });
       const data = (await response.json()) as InvoiceReviewResponse & {
         error?: string;
@@ -308,6 +323,7 @@ export function XeroApp({ view }: { view: AppView }) {
           <DashboardView
             invoices={invoices}
             isLoadingInvoices={isLoadingInvoices}
+            invoiceError={invoiceError}
             loadInvoices={loadInvoices}
             metrics={metrics}
             money={money}
@@ -384,6 +400,7 @@ function StatusBanner({ message, status }: { message: string; status: Status }) 
 function DashboardView({
   invoices,
   isLoadingInvoices,
+  invoiceError,
   loadInvoices,
   metrics,
   money,
@@ -391,6 +408,7 @@ function DashboardView({
 }: {
   invoices: Invoice[];
   isLoadingInvoices: boolean;
+  invoiceError: string | null;
   loadInvoices: () => void;
   metrics: DashboardMetrics;
   money: Intl.NumberFormat;
@@ -406,7 +424,12 @@ function DashboardView({
       </section>
 
       <section className="grid gap-4 lg:grid-cols-[1fr_320px]">
-        <InvoiceTable invoices={invoices} money={money} />
+        <InvoiceTable
+          invoiceError={invoiceError}
+          invoices={invoices}
+          isLoadingInvoices={isLoadingInvoices}
+          money={money}
+        />
         <aside className="rounded-md border border-[#d7ddd4] bg-white p-4">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -465,10 +488,14 @@ function MetricCard({ label, value }: { label: string; value: string }) {
 }
 
 function InvoiceTable({
+  invoiceError,
   invoices,
+  isLoadingInvoices,
   money,
 }: {
+  invoiceError: string | null;
   invoices: Invoice[];
+  isLoadingInvoices: boolean;
   money: Intl.NumberFormat;
 }) {
   return (
@@ -489,7 +516,19 @@ function InvoiceTable({
             </tr>
           </thead>
           <tbody>
-            {invoices.length === 0 ? (
+            {invoiceError ? (
+              <tr>
+                <td className="px-4 py-8 text-center text-[#7a2f25]" colSpan={6}>
+                  {invoiceError}
+                </td>
+              </tr>
+            ) : isLoadingInvoices ? (
+              <tr>
+                <td className="px-4 py-8 text-center text-[#526157]" colSpan={6}>
+                  Loading invoices...
+                </td>
+              </tr>
+            ) : invoices.length === 0 ? (
               <tr>
                 <td className="px-4 py-8 text-center text-[#526157]" colSpan={6}>
                   No invoices loaded yet.
@@ -539,45 +578,119 @@ function ReviewView({
   isLoadingInvoices: boolean;
   isReviewing: boolean;
   review: InvoiceReviewResponse | null;
-  runInvoiceReview: () => void;
+  runInvoiceReview: (question?: string) => Promise<void>;
   status: Status;
 }) {
+  const [question, setQuestion] = useState("");
+  const suggestionButtons = [
+    { label: "Check invoices", enabled: true },
+    { label: "Find cash flow risks", enabled: false },
+    { label: "Draft supplier updates", enabled: false },
+    { label: "Review customer trends", enabled: false },
+  ];
+
+  async function submitQuestion(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const nextQuestion = question.trim();
+
+    if (!nextQuestion) {
+      return;
+    }
+
+    await runInvoiceReview(nextQuestion);
+  }
+
+  async function runSuggestion(question: string) {
+    setQuestion(question);
+    await runInvoiceReview(question);
+  }
+
   return (
-    <section className="grid gap-4 lg:grid-cols-[1fr_340px]">
-      <div className="rounded-md border border-[#d7ddd4] bg-white">
-        <div className="flex flex-col gap-3 border-b border-[#d7ddd4] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-lg font-semibold">Agent suggestions</h2>
-            <p className="mt-1 text-sm text-[#526157]">
-              Ranked late-payment follow-ups with draft email copy.
-            </p>
-          </div>
-          <button
-            className="inline-flex h-10 items-center justify-center rounded-md bg-[#0f6f4d] px-3 text-sm font-semibold text-white transition hover:bg-[#0b5d40] disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={!status.isConnected || isReviewing}
-            onClick={runInvoiceReview}
-            type="button"
-          >
-            {isReviewing ? "Reviewing..." : "Run agent"}
-          </button>
+    <section className="flex flex-col gap-4">
+      <div className="rounded-md border border-[#d7ddd4] bg-white p-5">
+        <div>
+          <h2 className="text-lg font-semibold">Ask the agent</h2>
+          <p className="mt-1 text-sm text-[#526157]">
+            Ask a question about the connected Xero invoices.
+          </p>
         </div>
 
+        <form className="mt-4 flex flex-col gap-3 sm:flex-row" onSubmit={submitQuestion}>
+          <input
+            className="h-12 min-w-0 flex-1 rounded-md border border-[#b9c3b7] bg-white px-4 text-sm outline-none transition placeholder:text-[#8b978e] focus:border-[#0f6f4d] focus:ring-2 focus:ring-[#cfe4da]"
+            disabled={!status.isConnected || isReviewing}
+            onChange={(event) => setQuestion(event.target.value)}
+            placeholder="Ask about overdue invoices, payment risk, or who to chase first"
+            type="text"
+            value={question}
+          />
+          <button
+            className="inline-flex h-12 items-center justify-center rounded-md bg-[#0f6f4d] px-5 text-sm font-semibold text-white transition hover:bg-[#0b5d40] disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!status.isConnected || isReviewing || !question.trim()}
+            type="submit"
+          >
+            {isReviewing ? "Thinking..." : "Ask"}
+          </button>
+        </form>
+
+        <div className="mt-3 flex flex-wrap gap-2">
+          {suggestionButtons.map((suggestion) => (
+            <button
+              className="inline-flex h-9 items-center justify-center rounded-md border border-[#b9c3b7] bg-white px-3 text-sm font-medium text-[#17211b] transition hover:bg-[#eef2ec] disabled:cursor-not-allowed disabled:border-[#d7ddd4] disabled:text-[#9aa49d]"
+              disabled={!status.isConnected || isReviewing || !suggestion.enabled}
+              key={suggestion.label}
+              onClick={() => void runSuggestion(suggestion.label)}
+              type="button"
+            >
+              {isReviewing && suggestion.enabled ? "Checking invoices..." : suggestion.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-5 grid gap-3 border-t border-[#edf0eb] pt-4 text-sm sm:grid-cols-4">
+          <ReviewContextItem label="Invoices" value={String(invoices.length)} />
+          <ReviewContextItem
+            label="Agent"
+            value={isReviewing ? "Running" : review ? "Ready" : "Idle"}
+          />
+          <ReviewContextItem
+            label="Data"
+            value={isLoadingInvoices ? "Loading" : "Ready"}
+          />
+          <ReviewContextItem
+            label="Suggestions"
+            value={String(review?.reviews.length ?? 0)}
+          />
+        </div>
+      </div>
+
+      <div className="rounded-md border border-[#d7ddd4] bg-white">
         {!review ? (
-          <div className="px-4 py-10 text-center text-sm text-[#526157]">
-            Run the agent to identify late invoices, rank follow-up priority,
-            and draft emails for review.
+          <div className="px-5 py-14 text-center text-sm text-[#526157]">
+            Ask a question or use “Check invoices” to identify late invoices,
+            rank follow-up priority, and draft emails for review.
           </div>
         ) : review.reviews.length === 0 ? (
-          <div className="px-4 py-10 text-center text-sm text-[#526157]">
-            {review.summary}
+          <div className="px-5 py-10">
+            <div className="max-w-3xl rounded-md bg-[#eef2ec] px-4 py-3 text-sm leading-6 text-[#17211b]">
+              {review.answer ?? review.summary}
+            </div>
           </div>
         ) : (
-          <div className="divide-y divide-[#edf0eb]">
-            <div className="px-4 py-3 text-sm text-[#526157]">
-              {review.summary}
+          <div>
+            <div className="border-b border-[#edf0eb] px-5 py-4">
+              {review.answer ? (
+                <div className="max-w-4xl rounded-md bg-[#eef2ec] px-4 py-3 text-sm font-medium leading-6 text-[#17211b]">
+                  {review.answer}
+                </div>
+              ) : null}
+              <p className="mt-3 max-w-4xl text-sm leading-6 text-[#526157]">
+                {review.summary}
+              </p>
             </div>
-            {review.reviews.map((item) => (
-              <article className="px-4 py-5" key={`${item.rank}-${item.invoiceNumber}`}>
+            <div className="divide-y divide-[#edf0eb]">
+              {review.reviews.map((item) => (
+                <article className="px-5 py-5" key={`${item.rank}-${item.invoiceNumber}`}>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
@@ -636,34 +749,20 @@ function ReviewView({
                   </pre>
                 </div>
               </article>
-            ))}
+              ))}
+            </div>
           </div>
         )}
       </div>
-
-      <aside className="rounded-md border border-[#d7ddd4] bg-white p-4">
-        <h2 className="text-lg font-semibold">Review context</h2>
-        <dl className="mt-5 space-y-3 text-sm">
-          <div className="flex justify-between gap-4">
-            <dt className="text-[#526157]">Invoices available</dt>
-            <dd className="font-medium">{invoices.length}</dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-[#526157]">Agent status</dt>
-            <dd className="font-medium">
-              {isReviewing ? "Running" : review ? "Ready" : "Idle"}
-            </dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-[#526157]">Data refresh</dt>
-            <dd className="font-medium">{isLoadingInvoices ? "Loading" : "Ready"}</dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-[#526157]">Suggestions</dt>
-            <dd className="font-medium">{review?.reviews.length ?? 0}</dd>
-          </div>
-        </dl>
-      </aside>
     </section>
+  );
+}
+
+function ReviewContextItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-[#526157]">{label}</p>
+      <p className="mt-1 font-semibold">{value}</p>
+    </div>
   );
 }
