@@ -60,7 +60,7 @@ type GeminiInteraction = {
 
 const INTERACTIONS_URL =
   "https://generativelanguage.googleapis.com/v1beta/interactions";
-const MAX_ITERATIONS = 16;
+const MAX_ITERATIONS = 24;
 const MAX_TOOL_RESULT_CHARS = 20000;
 
 // Read-only tools the agent may use, mapped to the Xero scopes (any of which)
@@ -202,6 +202,7 @@ function buildSystemInstruction(today: string, tenantName: string) {
   return [
     `You are Ledger, an autonomous finance agent embedded in a dashboard connected to the Xero organisation "${tenantName}". Today is ${today}.`,
     "You have live read-only tools over the organisation's Xero data. Before answering, call the tools you need: list-invoices for chasing debtors; list-profit-and-loss, list-report-balance-sheet, list-trial-balance, list-bank-transactions, and list-payments for cash flow, spending, and performance questions; list-contacts plus list-aged-receivables-by-contact for customer credit risk. Call as few tools as necessary and stop once you have enough evidence.",
+    "IMPORTANT: batch your tool calls. When you need several pages or several different reports, request them all in ONE turn as parallel function calls (e.g. list-invoices pages 1-6 together, or the P&L and balance sheet together) instead of one call per turn. You have a limited number of turns.",
     "Every figure in your answer must come from tool results. Never invent data. If a tool errors because of missing permissions, say so plainly and answer with what you have.",
     "You may be in an ongoing conversation: earlier turns, their tool results, and your previous findings are context. When the user gives a follow-up instruction such as \"draft emails for those\", act on the entities you identified earlier without re-asking, and only call tools again if you are missing details.",
     'When you are finished, reply with ONLY valid JSON in this shape: {"answer":"direct answer to the user","summary":"short analytical summary of what you examined","insights":[{"title":"string","detail":"string","severity":"good|watch|risk"}],"reviews":[{"rank":1,"invoiceNumber":"string","contactName":"string","contactEmail":"string","amountDue":0,"currencyCode":"string","daysPastDue":0,"priority":"high|medium|low","reason":"string","recommendedAction":"string","emailSubject":"string","emailBody":"string"}],"followUps":["string"]}.',
@@ -367,7 +368,7 @@ export async function runXeroAgent(
       );
 
       if (interaction.status === "requires_action" && functionCalls.length > 0) {
-        const results = [];
+        const results: Array<Record<string, unknown>> = [];
 
         for (const call of functionCalls) {
           const args = call.arguments ?? {};
@@ -389,12 +390,25 @@ export async function runXeroAgent(
           });
         }
 
+        // Last round: return the tool results without offering tools again
+        // and demand the final answer, so the turn degrades gracefully
+        // instead of erroring out at the budget.
+        const isFinalRound = iteration === MAX_ITERATIONS - 2;
+
         payload = {
           model,
           previous_interaction_id: interaction.id,
           system_instruction: systemInstruction,
-          input: results,
-          tools: geminiTools,
+          input: isFinalRound
+            ? [
+                ...results,
+                {
+                  type: "text",
+                  text: "Your tool budget is used up. Do not request more tools. Reply NOW with ONLY the final JSON answer in the required shape, using the evidence you have gathered. If some data is missing, say so in the answer.",
+                },
+              ]
+            : results,
+          ...(isFinalRound ? {} : { tools: geminiTools }),
           generation_config: generationConfig,
         };
         continue;
