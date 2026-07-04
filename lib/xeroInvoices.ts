@@ -1,4 +1,5 @@
 import { createXeroClient } from "@/lib/xeroClient";
+import { fetchXeroInvoicesViaMcp } from "@/lib/xeroMcp";
 import { getXeroConnection, saveXeroConnection } from "@/lib/xeroStore";
 
 export type XeroInvoiceSummary = {
@@ -55,6 +56,10 @@ export function getErrorDetail(error: unknown) {
 }
 
 export async function fetchXeroInvoices(pageSize = 50) {
+  if (process.env.XERO_USE_MCP !== "false") {
+    return fetchXeroInvoicesViaMcp(pageSize);
+  }
+
   const connection = getXeroConnection();
 
   if (!connection.isConnected || !connection.tokenSet || !connection.tenantId) {
