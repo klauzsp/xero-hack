@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type AppView = "dashboard" | "review";
 
@@ -54,13 +54,71 @@ type InvoiceReview = {
   emailBody: string;
 };
 
-type InvoiceReviewResponse = {
-  generatedAt: string;
-  tenantName?: string;
-  answer?: string;
-  summary: string;
-  reviews: InvoiceReview[];
+type AgentInsight = {
+  title: string;
+  detail: string;
+  severity?: "good" | "watch" | "risk";
 };
+
+type AgentResult = {
+  answer?: string;
+  summary?: string;
+  insights?: AgentInsight[];
+  reviews?: InvoiceReview[];
+};
+
+type AgentStreamEvent =
+  | { type: "status"; message: string }
+  | { type: "abilities"; tools: string[]; locked: string[] }
+  | { type: "tool_call"; tool: string; args?: Record<string, unknown> }
+  | { type: "tool_result"; tool: string; preview?: string }
+  | { type: "answer"; result: AgentResult }
+  | { type: "error"; message: string };
+
+type AgentTraceStep = {
+  id: number;
+  kind: "status" | "tool" | "error";
+  tool?: string;
+  label: string;
+  detail?: string;
+  done: boolean;
+};
+
+const agentToolLabels: Record<string, string> = {
+  "list-invoices": "Scanning invoices",
+  "list-contacts": "Looking up contacts",
+  "list-contact-groups": "Looking up contact groups",
+  "list-accounts": "Reading chart of accounts",
+  "list-items": "Reading inventory items",
+  "list-tax-rates": "Reading tax rates",
+  "list-organisation-details": "Reading organisation details",
+  "list-tracking-categories": "Reading tracking categories",
+  "list-payments": "Reviewing payments",
+  "list-bank-transactions": "Reviewing bank transactions",
+  "list-credit-notes": "Checking credit notes",
+  "list-quotes": "Checking quotes",
+  "list-manual-journals": "Checking manual journals",
+  "list-profit-and-loss": "Reading profit & loss",
+  "list-report-balance-sheet": "Reading balance sheet",
+  "list-trial-balance": "Reading trial balance",
+  "list-aged-receivables-by-contact": "Checking aged receivables",
+  "list-aged-payables-by-contact": "Checking aged payables",
+};
+
+function describeToolArgs(args?: Record<string, unknown>) {
+  if (!args) {
+    return undefined;
+  }
+
+  const parts = Object.entries(args)
+    .filter(
+      ([, value]) =>
+        value !== undefined && value !== null && typeof value !== "object",
+    )
+    .map(([key, value]) => `${key}: ${String(value)}`);
+
+  return parts.length > 0 ? parts.join(" · ") : undefined;
+}
 
 const invoiceScopes = ["accounting.invoices.read", "accounting.invoices"];
 
@@ -81,10 +139,13 @@ export function XeroApp({ view }: { view: AppView }) {
   const [isLoadingStatus, setIsLoadingStatus] = useState(true);
   const [isLoadingInvoices, setIsLoadingInvoices] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
-  const [isReviewing, setIsReviewing] = useState(false);
-  const [review, setReview] = useState<InvoiceReviewResponse | null>(null);
+  const [isAgentRunning, setIsAgentRunning] = useState(false);
+  const [agentSteps, setAgentSteps] = useState<AgentTraceStep[]>([]);
+  const [agentResult, setAgentResult] = useState<AgentResult | null>(null);
+  const [lockedTools, setLockedTools] = useState<string[]>([]);
   const [invoiceError, setInvoiceError] = useState<string | null>(null);
   const [hasLoadedInvoices, setHasLoadedInvoices] = useState(false);
+  const traceIdRef = useRef(0);
 
   const currency = invoices.find((invoice) => invoice.currencyCode)?.currencyCode ?? "GBP";
   const money = useMemo(
@@ -226,36 +287,130 @@ export function XeroApp({ view }: { view: AppView }) {
     }
   }
 
-  async function runInvoiceReview(question = "Check invoices") {
-    setIsReviewing(true);
-    setReview(null);
-    setMessage("Running invoice review agent...");
+  function appendTraceStep(step: Omit<AgentTraceStep, "id">) {
+    traceIdRef.current += 1;
+    const id = traceIdRef.current;
+
+    setAgentSteps((steps) => [...steps, { ...step, id }]);
+  }
+
+  function handleAgentEvent(event: AgentStreamEvent) {
+    switch (event.type) {
+      case "status":
+        appendTraceStep({ kind: "status", label: event.message, done: true });
+        break;
+      case "abilities":
+        setLockedTools(event.locked);
+        appendTraceStep({
+          kind: "status",
+          label: `Agent loaded ${event.tools.length} Xero abilities`,
+          detail:
+            event.locked.length > 0
+              ? `${event.locked.length} more unlock after reconnecting with wider scopes`
+              : undefined,
+          done: true,
+        });
+        break;
+      case "tool_call":
+        appendTraceStep({
+          kind: "tool",
+          tool: event.tool,
+          label: agentToolLabels[event.tool] ?? event.tool,
+          detail: describeToolArgs(event.args),
+          done: false,
+        });
+        break;
+      case "tool_result":
+        setAgentSteps((steps) => {
+          for (let index = steps.length - 1; index >= 0; index--) {
+            const step = steps[index];
+
+            if (step.kind === "tool" && step.tool === event.tool && !step.done) {
+              return steps.map((nextStep, nextIndex) =>
+                nextIndex === index ? { ...nextStep, done: true } : nextStep,
+              );
+            }
+          }
+
+          return steps;
+        });
+        break;
+      case "answer": {
+        const insightCount = event.result.insights?.length ?? 0;
+        const reviewCount = event.result.reviews?.length ?? 0;
+
+        setAgentResult(event.result);
+        setMessage(
+          `Agent finished with ${insightCount} insight(s) and ${reviewCount} follow-up(s).`,
+        );
+        break;
+      }
+      case "error":
+        appendTraceStep({ kind: "error", label: event.message, done: true });
+        setMessage(event.message);
+        break;
+    }
+  }
+
+  async function runAgent(question = "Check invoices") {
+    setIsAgentRunning(true);
+    setAgentResult(null);
+    setAgentSteps([]);
+    setMessage("Agent is planning which Xero data to pull...");
 
     try {
-      const response = await fetch("/api/ai/invoice-review", {
+      const response = await fetch("/api/ai/agent", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ question }),
       });
-      const data = (await response.json()) as InvoiceReviewResponse & {
-        error?: string;
-        detail?: string;
-      };
 
-      if (!response.ok) {
-        throw new Error(data.detail ?? data.error ?? "Invoice review failed");
+      if (!response.ok || !response.body) {
+        const data = (await response.json().catch(() => ({}))) as {
+          error?: string;
+          detail?: string;
+        };
+
+        throw new Error(data.detail ?? data.error ?? "Agent request failed");
       }
 
-      setReview(data);
-      setMessage(`Agent ranked ${data.reviews.length} invoice follow-up(s).`);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split("\n");
+
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (line.trim()) {
+            handleAgentEvent(JSON.parse(line) as AgentStreamEvent);
+          }
+        }
+      }
+
+      if (buffer.trim()) {
+        handleAgentEvent(JSON.parse(buffer) as AgentStreamEvent);
+      }
     } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Invoice review failed",
-      );
+      const nextMessage =
+        error instanceof Error ? error.message : "Agent request failed";
+
+      appendTraceStep({ kind: "error", label: nextMessage, done: true });
+      setMessage(nextMessage);
     } finally {
-      setIsReviewing(false);
+      setIsAgentRunning(false);
     }
   }
 
@@ -313,7 +468,7 @@ export function XeroApp({ view }: { view: AppView }) {
           <p className="max-w-2xl text-base leading-7 text-[#526157]">
             {view === "dashboard"
               ? "Track invoice totals, receivables, and overdue work from your connected Xero company."
-              : "A workspace for future agentic suggestions based on Xero accounting signals."}
+              : "An autonomous agent with live Xero tools — it decides which data to pull, shows its working, and reports back."}
           </p>
         </section>
 
@@ -331,11 +486,13 @@ export function XeroApp({ view }: { view: AppView }) {
           />
         ) : (
           <ReviewView
+            agentResult={agentResult}
+            agentSteps={agentSteps}
             invoices={invoices}
+            isAgentRunning={isAgentRunning}
             isLoadingInvoices={isLoadingInvoices}
-            isReviewing={isReviewing}
-            review={review}
-            runInvoiceReview={runInvoiceReview}
+            lockedTools={lockedTools}
+            runAgent={runAgent}
             status={status}
           />
         )}
@@ -567,27 +724,33 @@ function InvoiceTable({
 }
 
 function ReviewView({
+  agentResult,
+  agentSteps,
   invoices,
+  isAgentRunning,
   isLoadingInvoices,
-  isReviewing,
-  review,
-  runInvoiceReview,
+  lockedTools,
+  runAgent,
   status,
 }: {
+  agentResult: AgentResult | null;
+  agentSteps: AgentTraceStep[];
   invoices: Invoice[];
+  isAgentRunning: boolean;
   isLoadingInvoices: boolean;
-  isReviewing: boolean;
-  review: InvoiceReviewResponse | null;
-  runInvoiceReview: (question?: string) => Promise<void>;
+  lockedTools: string[];
+  runAgent: (question?: string) => Promise<void>;
   status: Status;
 }) {
   const [question, setQuestion] = useState("");
   const suggestionButtons = [
-    { label: "Check invoices", enabled: true },
-    { label: "Find cash flow risks", enabled: false },
-    { label: "Draft supplier updates", enabled: false },
-    { label: "Review customer trends", enabled: false },
+    "Chase overdue invoices",
+    "Analyse our cash flow position",
+    "How is the business performing?",
+    "Which customers are the biggest credit risk?",
   ];
+  const insights = agentResult?.insights ?? [];
+  const reviews = agentResult?.reviews ?? [];
 
   async function submitQuestion(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -597,12 +760,12 @@ function ReviewView({
       return;
     }
 
-    await runInvoiceReview(nextQuestion);
+    await runAgent(nextQuestion);
   }
 
-  async function runSuggestion(question: string) {
-    setQuestion(question);
-    await runInvoiceReview(question);
+  async function runSuggestion(suggestion: string) {
+    setQuestion(suggestion);
+    await runAgent(suggestion);
   }
 
   return (
@@ -611,25 +774,27 @@ function ReviewView({
         <div>
           <h2 className="text-lg font-semibold">Ask the agent</h2>
           <p className="mt-1 text-sm text-[#526157]">
-            Ask a question about the connected Xero invoices.
+            The agent has live read-only tools over your Xero data — invoices,
+            reports, payments, contacts — and decides which to use for each
+            question.
           </p>
         </div>
 
         <form className="mt-4 flex flex-col gap-3 sm:flex-row" onSubmit={submitQuestion}>
           <input
             className="h-12 min-w-0 flex-1 rounded-md border border-[#b9c3b7] bg-white px-4 text-sm outline-none transition placeholder:text-[#8b978e] focus:border-[#0f6f4d] focus:ring-2 focus:ring-[#cfe4da]"
-            disabled={!status.isConnected || isReviewing}
+            disabled={!status.isConnected || isAgentRunning}
             onChange={(event) => setQuestion(event.target.value)}
-            placeholder="Ask about overdue invoices, payment risk, or who to chase first"
+            placeholder="Ask about cash flow, overdue invoices, spending, or customer risk"
             type="text"
             value={question}
           />
           <button
             className="inline-flex h-12 items-center justify-center rounded-md bg-[#0f6f4d] px-5 text-sm font-semibold text-white transition hover:bg-[#0b5d40] disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={!status.isConnected || isReviewing || !question.trim()}
+            disabled={!status.isConnected || isAgentRunning || !question.trim()}
             type="submit"
           >
-            {isReviewing ? "Thinking..." : "Ask"}
+            {isAgentRunning ? "Working..." : "Ask"}
           </button>
         </form>
 
@@ -637,59 +802,78 @@ function ReviewView({
           {suggestionButtons.map((suggestion) => (
             <button
               className="inline-flex h-9 items-center justify-center rounded-md border border-[#b9c3b7] bg-white px-3 text-sm font-medium text-[#17211b] transition hover:bg-[#eef2ec] disabled:cursor-not-allowed disabled:border-[#d7ddd4] disabled:text-[#9aa49d]"
-              disabled={!status.isConnected || isReviewing || !suggestion.enabled}
-              key={suggestion.label}
-              onClick={() => void runSuggestion(suggestion.label)}
+              disabled={!status.isConnected || isAgentRunning}
+              key={suggestion}
+              onClick={() => void runSuggestion(suggestion)}
               type="button"
             >
-              {isReviewing && suggestion.enabled ? "Checking invoices..." : suggestion.label}
+              {suggestion}
             </button>
           ))}
         </div>
+
+        {lockedTools.length > 0 ? (
+          <p className="mt-3 rounded-md border border-[#ead0a2] bg-[#fff8e8] px-3 py-2 text-xs text-[#6d4c16]">
+            {lockedTools.length} abilities are not covered by your current Xero
+            token. Disconnecting and reconnecting unlocks any that your Xero app
+            configuration allows.
+          </p>
+        ) : null}
 
         <div className="mt-5 grid gap-3 border-t border-[#edf0eb] pt-4 text-sm sm:grid-cols-4">
           <ReviewContextItem label="Invoices" value={String(invoices.length)} />
           <ReviewContextItem
             label="Agent"
-            value={isReviewing ? "Running" : review ? "Ready" : "Idle"}
+            value={isAgentRunning ? "Running" : agentResult ? "Ready" : "Idle"}
           />
           <ReviewContextItem
             label="Data"
             value={isLoadingInvoices ? "Loading" : "Ready"}
           />
           <ReviewContextItem
-            label="Suggestions"
-            value={String(review?.reviews.length ?? 0)}
+            label="Findings"
+            value={String(insights.length + reviews.length)}
           />
         </div>
       </div>
 
+      {agentSteps.length > 0 ? (
+        <AgentTrace isAgentRunning={isAgentRunning} steps={agentSteps} />
+      ) : null}
+
       <div className="rounded-md border border-[#d7ddd4] bg-white">
-        {!review ? (
+        {!agentResult ? (
           <div className="px-5 py-14 text-center text-sm text-[#526157]">
-            Ask a question or use “Check invoices” to identify late invoices,
-            rank follow-up priority, and draft emails for review.
-          </div>
-        ) : review.reviews.length === 0 ? (
-          <div className="px-5 py-10">
-            <div className="max-w-3xl rounded-md bg-[#eef2ec] px-4 py-3 text-sm leading-6 text-[#17211b]">
-              {review.answer ?? review.summary}
-            </div>
+            {isAgentRunning
+              ? "The agent is working — watch its steps above as it pulls live Xero data."
+              : "Ask a question or pick a suggestion. The agent chooses which Xero tools to call and reports back with evidence."}
           </div>
         ) : (
           <div>
             <div className="border-b border-[#edf0eb] px-5 py-4">
-              {review.answer ? (
+              {agentResult.answer ? (
                 <div className="max-w-4xl rounded-md bg-[#eef2ec] px-4 py-3 text-sm font-medium leading-6 text-[#17211b]">
-                  {review.answer}
+                  {agentResult.answer}
                 </div>
               ) : null}
-              <p className="mt-3 max-w-4xl text-sm leading-6 text-[#526157]">
-                {review.summary}
-              </p>
+              {agentResult.summary ? (
+                <p className="mt-3 max-w-4xl text-sm leading-6 text-[#526157]">
+                  {agentResult.summary}
+                </p>
+              ) : null}
             </div>
+            {insights.length > 0 ? (
+              <div className="grid gap-3 border-b border-[#edf0eb] px-5 py-4 sm:grid-cols-2">
+                {insights.map((insight) => (
+                  <InsightCard
+                    insight={insight}
+                    key={`${insight.title}-${insight.severity ?? "none"}`}
+                  />
+                ))}
+              </div>
+            ) : null}
             <div className="divide-y divide-[#edf0eb]">
-              {review.reviews.map((item) => (
+              {reviews.map((item) => (
                 <article className="px-5 py-5" key={`${item.rank}-${item.invoiceNumber}`}>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
@@ -746,6 +930,84 @@ function ReviewView({
         )}
       </div>
     </section>
+  );
+}
+
+function AgentTrace({
+  isAgentRunning,
+  steps,
+}: {
+  isAgentRunning: boolean;
+  steps: AgentTraceStep[];
+}) {
+  return (
+    <div className="rounded-md border border-[#d7ddd4] bg-white p-5">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Agent activity</h2>
+        <span
+          className={`rounded-md px-2 py-1 text-xs font-semibold ${
+            isAgentRunning
+              ? "bg-[#fff0c2] text-[#6d4c16]"
+              : "bg-[#e6eee9] text-[#0f6f4d]"
+          }`}
+        >
+          {isAgentRunning ? "Working" : "Finished"}
+        </span>
+      </div>
+      <ol className="mt-4 space-y-3">
+        {steps.map((step) => (
+          <li className="flex items-start gap-3 text-sm" key={step.id}>
+            <span
+              className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                step.kind === "error"
+                  ? "bg-[#f7dfdc] text-[#7a2f25]"
+                  : step.done
+                    ? "bg-[#e6eee9] text-[#0f6f4d]"
+                    : "animate-pulse bg-[#fff0c2] text-[#6d4c16]"
+              }`}
+            >
+              {step.kind === "error" ? "✕" : step.done ? "✓" : "•"}
+            </span>
+            <div className="min-w-0">
+              <p
+                className={`font-medium ${
+                  step.kind === "error" ? "text-[#7a2f25]" : "text-[#17211b]"
+                }`}
+              >
+                {step.label}
+              </p>
+              {step.detail ? (
+                <p className="truncate text-xs text-[#8b978e]">{step.detail}</p>
+              ) : null}
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function InsightCard({ insight }: { insight: AgentInsight }) {
+  const severity = insight.severity ?? "watch";
+
+  return (
+    <div className="rounded-md border border-[#d7ddd4] bg-[#fbfcfa] p-4">
+      <div className="flex items-start justify-between gap-3">
+        <h3 className="text-sm font-semibold">{insight.title}</h3>
+        <span
+          className={`rounded-md px-2 py-1 text-xs font-semibold capitalize ${
+            severity === "risk"
+              ? "bg-[#f7dfdc] text-[#7a2f25]"
+              : severity === "watch"
+                ? "bg-[#fff0c2] text-[#6d4c16]"
+                : "bg-[#e6eee9] text-[#0f6f4d]"
+          }`}
+        >
+          {severity}
+        </span>
+      </div>
+      <p className="mt-2 text-sm leading-6 text-[#526157]">{insight.detail}</p>
+    </div>
   );
 }
 

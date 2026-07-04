@@ -49,7 +49,7 @@ function hasRequiredMcpScopes(scopes: string[]) {
   return hasInvoices && hasSettings;
 }
 
-async function getFreshAccessToken() {
+export async function getFreshAccessToken() {
   const connection = getXeroConnection();
 
   if (!connection.isConnected || !connection.tokenSet || !connection.tenantId) {
@@ -104,11 +104,60 @@ async function getFreshAccessToken() {
   return {
     ok: true as const,
     accessToken,
+    grantedScopes,
     connection,
   };
 }
 
-function getTextContent(content: unknown) {
+export type XeroMcpSession = {
+  client: Client;
+  close: () => Promise<void>;
+  stderrText: () => string;
+};
+
+export async function openXeroMcpSession(
+  accessToken: string,
+): Promise<XeroMcpSession> {
+  const serverPath = join(
+    process.cwd(),
+    "node_modules",
+    "@xeroapi",
+    "xero-mcp-server",
+    "dist",
+    "index.js",
+  );
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [serverPath],
+    env: {
+      ...Object.fromEntries(
+        Object.entries(process.env).filter(
+          (entry): entry is [string, string] => typeof entry[1] === "string",
+        ),
+      ),
+      XERO_CLIENT_BEARER_TOKEN: accessToken,
+    },
+    stderr: "pipe",
+  });
+  const stderrChunks: string[] = [];
+  transport.stderr?.on("data", (chunk: Buffer) => {
+    stderrChunks.push(chunk.toString("utf8"));
+  });
+  const client = new Client({
+    name: "xero-hack-app",
+    version: "0.1.0",
+  });
+
+  await client.connect(transport);
+
+  return {
+    client,
+    close: () => client.close(),
+    stderrText: () => stderrChunks.join("").trim(),
+  };
+}
+
+export function getTextContent(content: unknown) {
   if (!Array.isArray(content)) {
     return [];
   }
@@ -152,44 +201,14 @@ export async function fetchXeroInvoicesViaMcp(pageSize = 50) {
     return tokenResult;
   }
 
-  const serverPath = join(
-    process.cwd(),
-    "node_modules",
-    "@xeroapi",
-    "xero-mcp-server",
-    "dist",
-    "index.js",
-  );
-  const transport = new StdioClientTransport({
-    command: process.execPath,
-    args: [serverPath],
-    env: {
-      ...Object.fromEntries(
-        Object.entries(process.env).filter(
-          (entry): entry is [string, string] => typeof entry[1] === "string",
-        ),
-      ),
-      XERO_CLIENT_BEARER_TOKEN: tokenResult.accessToken,
-    },
-    stderr: "pipe",
-  });
-  const stderrChunks: string[] = [];
-  transport.stderr?.on("data", (chunk: Buffer) => {
-    stderrChunks.push(chunk.toString("utf8"));
-  });
-  const client = new Client({
-    name: "xero-hack-app",
-    version: "0.1.0",
-  });
+  const session = await openXeroMcpSession(tokenResult.accessToken);
 
   try {
-    await client.connect(transport);
-
     const invoices: XeroInvoiceSummary[] = [];
     let page = 1;
 
     while (invoices.length < pageSize) {
-      const result = await client.callTool({
+      const result = await session.client.callTool({
         name: "list-invoices",
         arguments: { page },
       });
@@ -230,10 +249,10 @@ export async function fetchXeroInvoicesViaMcp(pageSize = 50) {
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown MCP error";
-    const stderr = stderrChunks.join("").trim();
+    const stderr = session.stderrText();
 
     throw new Error(stderr ? `${message}: ${stderr}` : message);
   } finally {
-    await client.close();
+    await session.close();
   }
 }

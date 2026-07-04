@@ -57,8 +57,10 @@ export function getErrorDetail(error: unknown) {
 
 export async function fetchXeroInvoices(pageSize = 50) {
   if (process.env.XERO_USE_MCP !== "false") {
+    console.log("[Xero] Using MCP path");
     return fetchXeroInvoicesViaMcp(pageSize);
   }
+  console.log("[Xero] Using xero-node fallback path");
 
   const connection = getXeroConnection();
 
@@ -130,7 +132,9 @@ export async function fetchXeroInvoices(pageSize = 50) {
       dueDate: invoice.dueDate,
       total: invoice.total,
       amountDue: invoice.amountDue,
-      currencyCode: invoice.currencyCode ? String(invoice.currencyCode) : undefined,
+      currencyCode: invoice.currencyCode
+        ? String(invoice.currencyCode)
+        : undefined,
     }),
   );
 
