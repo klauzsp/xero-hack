@@ -17,6 +17,7 @@ export async function GET() {
     isConnected: connection.isConnected,
     tenantId: connection.tenantId,
     tenantName: connection.tenantName,
+    canDisconnectFromXero: Boolean(connection.connectionId),
     scopes: xeroScopes,
   });
 }

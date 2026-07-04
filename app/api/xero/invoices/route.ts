@@ -3,6 +3,32 @@ import { getXeroConnection, saveXeroConnection } from "@/lib/xeroStore";
 
 export const runtime = "nodejs";
 
+function getGrantedScopes(tokenSet: unknown) {
+  if (!tokenSet || typeof tokenSet !== "object" || !("scope" in tokenSet)) {
+    return [];
+  }
+
+  const scope = (tokenSet as { scope?: unknown }).scope;
+
+  if (Array.isArray(scope)) {
+    return scope.filter((value): value is string => typeof value === "string");
+  }
+
+  if (typeof scope === "string") {
+    return scope.split(" ").filter(Boolean);
+  }
+
+  return [];
+}
+
+function getErrorDetail(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return "Unknown error";
+}
+
 export async function GET() {
   const connection = getXeroConnection();
 
@@ -18,12 +44,30 @@ export async function GET() {
     xero.setTokenSet(connection.tokenSet);
 
     const tokenSet = xero.readTokenSet();
+    const grantedScopes = getGrantedScopes(tokenSet);
+    const hasInvoiceScope =
+      grantedScopes.includes("accounting.invoices.read") ||
+      grantedScopes.includes("accounting.invoices");
+
+    if (!hasInvoiceScope) {
+      return Response.json(
+        {
+          error: "Reconnect to Xero with invoice access",
+          detail:
+            "Your current token does not include accounting.invoices.read. Click Connect Xero again and approve the new invoice scope.",
+          grantedScopes,
+        },
+        { status: 403 },
+      );
+    }
+
     if (typeof tokenSet.expired === "function" && tokenSet.expired()) {
       const refreshedTokenSet = await xero.refreshToken();
       saveXeroConnection(
         refreshedTokenSet,
         connection.tenantId,
         connection.tenantName ?? connection.tenantId,
+        connection.connectionId ?? undefined,
       );
     }
 
@@ -66,7 +110,7 @@ export async function GET() {
     return Response.json(
       {
         error: "Unable to retrieve Xero invoices",
-        detail: error instanceof Error ? error.message : "Unknown error",
+        detail: getErrorDetail(error),
       },
       { status: 500 },
     );

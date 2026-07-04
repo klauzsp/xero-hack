@@ -2,7 +2,7 @@ import { XeroClient } from "xero-node";
 
 export const xeroScopes = (
   process.env.XERO_SCOPES ??
-  "openid profile email accounting.contacts.read offline_access"
+  "openid profile email accounting.invoices.read offline_access"
 ).split(" ");
 
 export function createXeroClient() {

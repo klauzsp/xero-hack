@@ -8,6 +8,7 @@ type Status = {
   isConnected: boolean;
   tenantId: string | null;
   tenantName: string | null;
+  canDisconnectFromXero: boolean;
   scopes: string[];
 };
 
@@ -28,12 +29,15 @@ type InvoiceResponse = {
   invoices: Invoice[];
 };
 
+const invoiceScopes = ["accounting.invoices.read", "accounting.invoices"];
+
 const initialStatus: Status = {
   isConfigured: false,
   missingConfig: [],
   isConnected: false,
   tenantId: null,
   tenantName: null,
+  canDisconnectFromXero: false,
   scopes: [],
 };
 
@@ -43,6 +47,7 @@ export function XeroDashboard() {
   const [message, setMessage] = useState("Checking local configuration...");
   const [isLoadingStatus, setIsLoadingStatus] = useState(true);
   const [isLoadingInvoices, setIsLoadingInvoices] = useState(false);
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
 
   const formatter = useMemo(
     () =>
@@ -104,6 +109,35 @@ export function XeroDashboard() {
     }
   }
 
+  async function disconnectXero() {
+    setIsDisconnecting(true);
+    setMessage("Disconnecting local Xero session...");
+
+    try {
+      const response = await fetch("/api/xero/disconnect", {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        throw new Error("Disconnect failed");
+      }
+
+      setStatus((currentStatus) => ({
+        ...currentStatus,
+        isConnected: false,
+        tenantId: null,
+        tenantName: null,
+        canDisconnectFromXero: false,
+      }));
+      setInvoices([]);
+      setMessage("Disconnected from Xero and cleared the local session.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Disconnect failed");
+    } finally {
+      setIsDisconnecting(false);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-[#f7f8f6] px-6 py-10 text-[#17211b] sm:px-10">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-8">
@@ -138,6 +172,16 @@ export function XeroDashboard() {
             >
               {isLoadingInvoices ? "Fetching..." : "Fetch invoices"}
             </button>
+            <button
+              className="inline-flex h-11 items-center justify-center rounded-md border border-[#d8bbb6] bg-white px-4 text-sm font-semibold text-[#7a2f25] transition hover:bg-[#fbefed] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={
+                !status.isConnected || isDisconnecting || isLoadingStatus
+              }
+              onClick={disconnectXero}
+              type="button"
+            >
+              {isDisconnecting ? "Disconnecting..." : "Disconnect"}
+            </button>
           </div>
         </section>
 
@@ -163,11 +207,11 @@ export function XeroDashboard() {
         </section>
 
         {status.isConnected &&
-        !status.scopes.includes("accounting.transactions.read") &&
-        !status.scopes.includes("accounting.transactions") ? (
+        !invoiceScopes.some((scope) => status.scopes.includes(scope)) ? (
           <section className="rounded-md border border-[#ead0a2] bg-[#fff8e8] p-4 text-sm text-[#6d4c16]">
-            Connected with contacts access. Invoice retrieval needs Xero to
-            accept `accounting.transactions.read` for this app.
+            This app is configured without invoice scope. Add
+            `accounting.invoices.read` to `XERO_SCOPES`, restart the dev server,
+            and reconnect to Xero.
           </section>
         ) : null}
 

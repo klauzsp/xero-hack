@@ -33,6 +33,7 @@ export async function GET(request: NextRequest) {
       tokenSet,
       tenant.tenantId,
       tenant.tenantName ?? tenant.tenantId,
+      tenant.id,
     );
 
     return NextResponse.redirect(new URL("/?connected=1", request.url));
