@@ -8,9 +8,9 @@ const fraunces = Fraunces({
 });
 
 export const metadata: Metadata = {
-  title: "Steady Books",
+  title: "Kite",
   description:
-    "Steady Books is an accounting platform where Bruno, the AI finance agent, helps owners like Alice manage cash flow straight from Xero.",
+    "Kite is an accounting platform where Bruno, the AI finance agent, helps owners like Alice manage cash flow straight from Xero.",
 };
 
 export default function RootLayout({

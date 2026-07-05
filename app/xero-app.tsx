@@ -631,7 +631,7 @@ export function XeroApp({
 
               <div className="leading-tight">
                 <p className="font-[family-name:var(--font-fraunces)] text-lg font-semibold tracking-[-0.02em] text-[#2f2417]">
-                  Steady Books
+                  Kite
                 </p>
               </div>
             </Link>
