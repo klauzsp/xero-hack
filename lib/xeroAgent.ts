@@ -60,8 +60,16 @@ type GeminiInteraction = {
 
 const INTERACTIONS_URL =
   "https://generativelanguage.googleapis.com/v1beta/interactions";
-const MAX_ITERATIONS = 24;
+const MAX_ITERATIONS = 10;
 const MAX_TOOL_RESULT_CHARS = 20000;
+// Xero rejects too many concurrent requests; 4 matches the batching used for
+// invoice paging in xeroMcp.ts.
+const TOOL_CONCURRENCY = 4;
+// The MCP server returns only 10 invoices per page, so the model burns a
+// whole Gemini roundtrip per page discovering whether more exist. Serve it
+// virtual pages instead: each list-invoices call fans out to this many real
+// pages in parallel and merges them.
+const INVOICE_PAGE_SPAN = 4;
 
 // Read-only tools the agent may use, mapped to the Xero scopes (any of which)
 // unlock them. Covers both the broad legacy scopes (accounting.transactions,
@@ -165,6 +173,12 @@ type McpToolInfo = {
   inputSchema?: unknown;
 };
 
+// The MCP server's tool catalog is static per installed server version, so
+// cache it after the first session. Later questions then call Gemini right
+// away while the MCP subprocess is still spawning, instead of waiting for
+// spawn + list-tools before the first model call.
+let cachedToolCatalog: McpToolInfo[] | null = null;
+
 function selectAgentTools(available: McpToolInfo[], grantedScopes: string[]) {
   const tools: McpToolInfo[] = [];
   const locked: string[] = [];
@@ -190,7 +204,10 @@ function toGeminiTools(tools: McpToolInfo[]) {
   return tools.map((tool) => ({
     type: "function",
     name: tool.name,
-    description: tool.description?.slice(0, 1000) ?? tool.name,
+    description:
+      tool.name === "list-invoices"
+        ? "List invoices. Each page returns up to 40 invoices; page 1 covers most organisations, so only request page 2 if page 1 came back full."
+        : tool.description?.slice(0, 1000) ?? tool.name,
     parameters: sanitizeSchema(tool.inputSchema) ?? {
       type: "object",
       properties: {},
@@ -200,9 +217,11 @@ function toGeminiTools(tools: McpToolInfo[]) {
 
 function buildSystemInstruction(today: string, tenantName: string) {
   return [
-    `You are Ledger, an autonomous finance agent embedded in a dashboard connected to the Xero organisation "${tenantName}". Today is ${today}.`,
+    `You are Bruno, an autonomous finance agent embedded in a dashboard connected to the Xero organisation "${tenantName}". Today is ${today}.`,
+    "The user is Alice, the business owner. She and the dashboard may call the business \"the roastery\" or \"Alice's roastery\" — these nicknames always mean the connected organisation itself, whatever its registered name. A question like \"how is the roastery performing?\" asks about overall business performance: answer it from the P&L, balance sheet, and receivables. Never search Xero for \"Roastery\", \"Alice\", or similar nicknames as a contact, item, department, or tracking category unless the user explicitly asks about one by that name.",
     "You have live read-only tools over the organisation's Xero data. Before answering, call the tools you need: list-invoices for chasing debtors; list-profit-and-loss, list-report-balance-sheet, list-trial-balance, list-bank-transactions, and list-payments for cash flow, spending, and performance questions; list-contacts plus list-aged-receivables-by-contact for customer credit risk. Call as few tools as necessary and stop once you have enough evidence.",
-    "IMPORTANT: batch your tool calls. When you need several pages or several different reports, request them all in ONE turn as parallel function calls (e.g. list-invoices pages 1-6 together, or the P&L and balance sheet together) instead of one call per turn. You have a limited number of turns.",
+    "IMPORTANT: batch your tool calls. When you need several different data sets, request them all in ONE turn as parallel function calls (e.g. the invoices, the P&L, and the balance sheet together) instead of one call per turn. You have a limited number of turns.",
+    "Be fast: aim to answer within 2-3 tool turns. list-invoices returns up to 40 invoices per page, so page 1 alone usually covers everything — only ask for page 2 if page 1 came back full. Prefer one summary report over many detail calls: list-aged-receivables-by-contact answers who-owes-what in a single call.",
     "Every figure in your answer must come from tool results. Never invent data. If a tool errors because of missing permissions, say so plainly and answer with what you have.",
     "You may be in an ongoing conversation: earlier turns, their tool results, and your previous findings are context. When the user gives a follow-up instruction such as \"draft emails for those\", act on the entities you identified earlier without re-asking, and only call tools again if you are missing details.",
     'When you are finished, reply with ONLY valid JSON in this shape: {"answer":"direct answer to the user","summary":"short analytical summary of what you examined","insights":[{"title":"string","detail":"string","severity":"good|watch|risk"}],"reviews":[{"rank":1,"invoiceNumber":"string","contactName":"string","contactEmail":"string","amountDue":0,"currencyCode":"string","daysPastDue":0,"priority":"high|medium|low","reason":"string","recommendedAction":"string","emailSubject":"string","emailBody":"string"}],"followUps":["string"]}.',
@@ -259,6 +278,10 @@ async function callAgentTool(
   args: Record<string, unknown>,
 ) {
   try {
+    if (name === "list-invoices") {
+      return await callListInvoicesWide(session, args ?? {});
+    }
+
     const result = await session.client.callTool({
       name,
       arguments: args ?? {},
@@ -271,6 +294,40 @@ async function callAgentTool(
   } catch (error) {
     return `Error calling ${name}: ${getErrorDetail(error)}`;
   }
+}
+
+// One virtual page = INVOICE_PAGE_SPAN real MCP pages fetched in parallel and
+// merged, so the model sees 40 invoices per call instead of 10.
+async function callListInvoicesWide(
+  session: XeroMcpSession,
+  args: Record<string, unknown>,
+) {
+  const requested = Number(args.page);
+  const virtualPage =
+    Number.isFinite(requested) && requested >= 1 ? Math.floor(requested) : 1;
+  const firstRealPage = (virtualPage - 1) * INVOICE_PAGE_SPAN + 1;
+  const pages = Array.from(
+    { length: INVOICE_PAGE_SPAN },
+    (_, offset) => firstRealPage + offset,
+  );
+  const texts = await Promise.all(
+    pages.map(async (page) => {
+      const result = await session.client.callTool({
+        name: "list-invoices",
+        arguments: { ...args, page },
+      });
+
+      return getTextContent(result.content)
+        .map((item) => item.text)
+        .join("\n");
+    }),
+  );
+  // Drop trailing empty pages; if no page had invoices, surface the first
+  // page's message (e.g. an error or "no invoices found") as-is.
+  const withInvoices = texts.filter((text) => text.includes("Invoice ID: "));
+  const merged = withInvoices.length > 0 ? withInvoices.join("\n") : texts[0];
+
+  return merged || "The tool returned no data.";
 }
 
 async function callGemini(apiKey: string, payload: Record<string, unknown>) {
@@ -321,12 +378,22 @@ export async function runXeroAgent(
 
   emit({ type: "status", message: "Cracking open the books..." });
 
-  const session = await openXeroMcpSession(tokenResult.accessToken);
+  const sessionPromise = openXeroMcpSession(tokenResult.accessToken);
+  sessionPromise.catch(() => {
+    // Failures surface where the promise is awaited; this only prevents an
+    // unhandled rejection if Gemini errors before the session is needed.
+  });
+  let session: XeroMcpSession | null = null;
 
   try {
-    const listed = await session.client.listTools();
+    if (!cachedToolCatalog) {
+      session = await sessionPromise;
+      const listed = await session.client.listTools();
+      cachedToolCatalog = listed.tools as McpToolInfo[];
+    }
+
     const { tools, locked } = selectAgentTools(
-      listed.tools as McpToolInfo[],
+      cachedToolCatalog,
       tokenResult.grantedScopes,
     );
 
@@ -369,25 +436,40 @@ export async function runXeroAgent(
       );
 
       if (interaction.status === "requires_action" && functionCalls.length > 0) {
+        const activeSession = (session ??= await sessionPromise);
         const results: Array<Record<string, unknown>> = [];
 
-        for (const call of functionCalls) {
-          const args = call.arguments ?? {};
+        for (
+          let start = 0;
+          start < functionCalls.length;
+          start += TOOL_CONCURRENCY
+        ) {
+          const batch = functionCalls.slice(start, start + TOOL_CONCURRENCY);
 
-          emit({ type: "tool_call", tool: call.name, args });
+          for (const call of batch) {
+            emit({ type: "tool_call", tool: call.name, args: call.arguments ?? {} });
+          }
 
-          const resultText = await callAgentTool(session, call.name, args);
+          const batchResults = await Promise.all(
+            batch.map((call) =>
+              callAgentTool(activeSession, call.name, call.arguments ?? {}),
+            ),
+          );
 
-          emit({
-            type: "tool_result",
-            tool: call.name,
-            preview: resultText.slice(0, 200),
-          });
-          results.push({
-            type: "function_result",
-            call_id: call.id,
-            name: call.name,
-            result: resultText.slice(0, MAX_TOOL_RESULT_CHARS),
+          batch.forEach((call, index) => {
+            const resultText = batchResults[index];
+
+            emit({
+              type: "tool_result",
+              tool: call.name,
+              preview: resultText.slice(0, 200),
+            });
+            results.push({
+              type: "function_result",
+              call_id: call.id,
+              name: call.name,
+              result: resultText.slice(0, MAX_TOOL_RESULT_CHARS),
+            });
           });
         }
 
@@ -432,7 +514,7 @@ export async function runXeroAgent(
       message: "The agent hit its tool-call limit before finishing an answer.",
     });
   } catch (error) {
-    const stderr = session.stderrText();
+    const stderr = session?.stderrText() ?? "";
     const message = getErrorDetail(error);
 
     emit({
@@ -440,6 +522,10 @@ export async function runXeroAgent(
       message: stderr ? `${message}: ${stderr}` : message,
     });
   } finally {
-    await session.close();
+    try {
+      await (session ?? (await sessionPromise)).close();
+    } catch {
+      // The session never opened; there is nothing to close.
+    }
   }
 }

@@ -155,90 +155,98 @@ async function fetchXeroDashboardReportsUncached(): Promise<DashboardReportsResu
     netAssets: null,
   };
 
-  try {
-    const response = await xero.accountingApi.getReportProfitAndLoss(
-      tenantId,
-      undefined,
-      undefined,
-      2,
-      "MONTH",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      true,
-    );
-    const report = (response.body.reports ?? [])[0] as ReportLike | undefined;
-
-    if (report) {
-      const byLabel = collectValuesByLabel(report);
-      const labels = headerLabels(report);
-      const income = byLabel.get("Total Income") ?? [];
-      const costOfSales = byLabel.get("Total Cost of Sales") ?? [];
-      const operatingExpenses = byLabel.get("Total Operating Expenses") ?? [];
-      const netProfit = byLabel.get("Net Profit") ?? [];
-      // Xero returns the newest period first; the chart wants oldest → newest.
-      const months = labels
-        .map((label, index) => ({
-          label: shortMonthLabel(label),
-          income: income[index] ?? 0,
-          expenses: (costOfSales[index] ?? 0) + (operatingExpenses[index] ?? 0),
-          netProfit: netProfit[index] ?? 0,
-        }))
-        .reverse();
-
-      if (months.length > 0) {
-        reports.pnl = { months };
-      }
-    }
-  } catch {
-    // Missing report scope or API hiccup: the dashboard renders without P&L.
-  }
-
-  try {
-    const today = new Date().toISOString().slice(0, 10);
-    const response = await xero.accountingApi.getReportBalanceSheet(
-      tenantId,
-      today,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      true,
-    );
-    const report = (response.body.reports ?? [])[0] as ReportLike | undefined;
-
-    if (report) {
-      const bankSection = (report.rows ?? []).find(
-        (row) => row.rowType === "Section" && row.title === "Bank",
+  // Each report degrades independently, so fetch both in parallel.
+  const loadPnl = async () => {
+    try {
+      const response = await xero.accountingApi.getReportProfitAndLoss(
+        tenantId,
+        undefined,
+        undefined,
+        2,
+        "MONTH",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true,
       );
+      const report = (response.body.reports ?? [])[0] as ReportLike | undefined;
 
-      if (bankSection) {
-        const accounts = (bankSection.rows ?? [])
-          .filter((row) => row.rowType === "Row")
-          .map((row) => ({
-            name: cellText(row, 0),
-            balance: rowValues(row)[0] ?? 0,
-          }));
-        const totalRow = (bankSection.rows ?? []).find(
-          (row) => row.rowType === "SummaryRow",
-        );
-        const total = totalRow
-          ? rowValues(totalRow)[0] ?? 0
-          : accounts.reduce((sum, account) => sum + account.balance, 0);
+      if (report) {
+        const byLabel = collectValuesByLabel(report);
+        const labels = headerLabels(report);
+        const income = byLabel.get("Total Income") ?? [];
+        const costOfSales = byLabel.get("Total Cost of Sales") ?? [];
+        const operatingExpenses = byLabel.get("Total Operating Expenses") ?? [];
+        const netProfit = byLabel.get("Net Profit") ?? [];
+        // Xero returns the newest period first; the chart wants oldest → newest.
+        const months = labels
+          .map((label, index) => ({
+            label: shortMonthLabel(label),
+            income: income[index] ?? 0,
+            expenses:
+              (costOfSales[index] ?? 0) + (operatingExpenses[index] ?? 0),
+            netProfit: netProfit[index] ?? 0,
+          }))
+          .reverse();
 
-        reports.bank = { accounts, total };
+        if (months.length > 0) {
+          reports.pnl = { months };
+        }
       }
-
-      const netAssets = collectValuesByLabel(report).get("Net Assets");
-
-      if (netAssets && netAssets.length > 0) {
-        reports.netAssets = netAssets[0];
-      }
+    } catch {
+      // Missing report scope or API hiccup: the dashboard renders without P&L.
     }
-  } catch {
-    // Same graceful degradation as the P&L block.
-  }
+  };
+
+  const loadBalanceSheet = async () => {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const response = await xero.accountingApi.getReportBalanceSheet(
+        tenantId,
+        today,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true,
+      );
+      const report = (response.body.reports ?? [])[0] as ReportLike | undefined;
+
+      if (report) {
+        const bankSection = (report.rows ?? []).find(
+          (row) => row.rowType === "Section" && row.title === "Bank",
+        );
+
+        if (bankSection) {
+          const accounts = (bankSection.rows ?? [])
+            .filter((row) => row.rowType === "Row")
+            .map((row) => ({
+              name: cellText(row, 0),
+              balance: rowValues(row)[0] ?? 0,
+            }));
+          const totalRow = (bankSection.rows ?? []).find(
+            (row) => row.rowType === "SummaryRow",
+          );
+          const total = totalRow
+            ? rowValues(totalRow)[0] ?? 0
+            : accounts.reduce((sum, account) => sum + account.balance, 0);
+
+          reports.bank = { accounts, total };
+        }
+
+        const netAssets = collectValuesByLabel(report).get("Net Assets");
+
+        if (netAssets && netAssets.length > 0) {
+          reports.netAssets = netAssets[0];
+        }
+      }
+    } catch {
+      // Same graceful degradation as the P&L block.
+    }
+  };
+
+  await Promise.all([loadPnl(), loadBalanceSheet()]);
 
   return { ok: true, status: 200, body: reports };
 }
