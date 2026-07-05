@@ -623,10 +623,12 @@ export function XeroApp({
         <nav className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-5 sm:px-8">
           <div className="flex items-center gap-8">
             <Link className="flex items-center gap-3" href="/">
-              <div className="flex h-10 w-10 flex-col items-center justify-center gap-[3px] rounded-2xl bg-[#6f2f1f] shadow-sm">
-                <span className="h-[3px] w-4 rounded-full bg-[#fff7ec]" />
-                <span className="h-[3px] w-4 rounded-full bg-[#fff7ec]" />
-                <span className="h-[3px] w-4 rounded-full bg-[#fff7ec]" />
+              <div className="h-10 w-10 overflow-hidden rounded-2xl border border-[#e4d2b8] bg-white shadow-sm">
+                <img
+                  alt="Kite logo"
+                  className="h-full w-full object-cover"
+                  src="/kite-mark.png"
+                />
               </div>
 
               <div className="leading-tight">
@@ -674,7 +676,7 @@ export function XeroApp({
             <div className="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-center">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#9a6b3f]">
-                  {status.isConnected ? status.tenantName : persona.business}
+                  {persona.business}
                 </p>
 
                 <h1 className="mt-2 text-2xl font-semibold leading-tight sm:text-3xl">
@@ -877,7 +879,7 @@ function DashboardView({
           isLoadingInvoices={isLoadingInvoices}
           money={money}
         />
-        <aside className="rounded-2xl border border-[#e4d2b8] bg-[#fffaf4] p-4">
+        <aside className="self-start rounded-2xl border border-[#e4d2b8] bg-[#fffaf4] p-4">
           <h2 className="text-lg font-semibold">
             Want a cash flow recommendation?
           </h2>
@@ -1450,17 +1452,24 @@ function ReviewView({
                             {item.reason}
                           </p>
                         </div>
-                        <span
-                          className={`rounded-full px-3 py-1 text-xs font-semibold capitalize ${
-                            item.priority === "high"
-                              ? "bg-[#f7dfdc] text-[#7a2f25]"
-                              : item.priority === "medium"
-                                ? "bg-[#fff0c2] text-[#6d4c16]"
-                                : "bg-[#eadbc3] text-[#6f2f1f]"
-                          }`}
-                        >
-                          {item.priority}
-                        </span>
+                        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                          {!item.contactEmail?.trim() ? (
+                            <span className="rounded-full border border-[#ead0a2] bg-[#fff8e8] px-3 py-1 text-xs font-semibold text-[#6d4c16]">
+                              No email on file
+                            </span>
+                          ) : null}
+                          <span
+                            className={`rounded-full px-3 py-1 text-xs font-semibold capitalize ${
+                              item.priority === "high"
+                                ? "bg-[#f7dfdc] text-[#7a2f25]"
+                                : item.priority === "medium"
+                                  ? "bg-[#fff0c2] text-[#6d4c16]"
+                                  : "bg-[#eadbc3] text-[#6f2f1f]"
+                            }`}
+                          >
+                            {item.priority}
+                          </span>
+                        </div>
                       </div>
 
                       <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
